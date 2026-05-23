@@ -1,0 +1,207 @@
+<?php
+/**
+ * XML sitemap and robots.txt support.
+ *
+ * @package SuperSEO
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Generates a lightweight XML sitemap and valid robots.txt.
+ */
+final class Super_SEO_Sitemap {
+	/**
+	 * Plugin instance.
+	 *
+	 * @var Super_SEO
+	 */
+	private $plugin;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param Super_SEO $plugin Plugin.
+	 */
+	public function __construct( Super_SEO $plugin ) {
+		$this->plugin = $plugin;
+
+		add_action( 'init', array( $this, 'add_rewrite_rule' ) );
+		add_filter( 'query_vars', array( $this, 'add_query_var' ) );
+		add_filter( 'redirect_canonical', array( $this, 'disable_sitemap_canonical_redirect' ), 10, 2 );
+		add_action( 'template_redirect', array( $this, 'maybe_output_sitemap' ) );
+		add_filter( 'robots_txt', array( $this, 'filter_robots_txt' ), 20, 2 );
+	}
+
+	/**
+	 * Adds sitemap rewrite rule.
+	 *
+	 * @return void
+	 */
+	public function add_rewrite_rule() {
+		add_rewrite_rule( '^super-seo-sitemap\.xml/?$', 'index.php?super_seo_sitemap=1', 'top' );
+	}
+
+	/**
+	 * Adds query var.
+	 *
+	 * @param array $vars Query vars.
+	 * @return array
+	 */
+	public function add_query_var( $vars ) {
+		$vars[] = 'super_seo_sitemap';
+
+		return $vars;
+	}
+
+	/**
+	 * Outputs sitemap when requested.
+	 *
+	 * @return void
+	 */
+	public function maybe_output_sitemap() {
+		if ( ! get_query_var( 'super_seo_sitemap' ) ) {
+			return;
+		}
+
+		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'sitemap_enabled', 1 ) ) {
+			status_header( 404 );
+			exit;
+		}
+
+		header( 'Content-Type: application/xml; charset=' . get_bloginfo( 'charset' ) );
+		echo '<?xml version="1.0" encoding="' . esc_attr( get_bloginfo( 'charset' ) ) . "\"?>\n";
+		echo "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n";
+
+		foreach ( $this->entries() as $entry ) {
+			echo "\t<url>\n";
+			echo "\t\t<loc>" . Super_SEO_Helpers::esc_xml( $entry['loc'] ) . "</loc>\n";
+
+			if ( ! empty( $entry['lastmod'] ) ) {
+				echo "\t\t<lastmod>" . Super_SEO_Helpers::esc_xml( $entry['lastmod'] ) . "</lastmod>\n";
+			}
+
+			echo "\t\t<changefreq>" . Super_SEO_Helpers::esc_xml( $entry['changefreq'] ) . "</changefreq>\n";
+			echo "\t\t<priority>" . Super_SEO_Helpers::esc_xml( $entry['priority'] ) . "</priority>\n";
+			echo "\t</url>\n";
+		}
+
+		echo "</urlset>\n";
+		exit;
+	}
+
+	/**
+	 * Keeps the XML sitemap from being redirected to a trailing slash URL.
+	 *
+	 * @param string|false $redirect_url  Redirect URL.
+	 * @param string       $requested_url Requested URL.
+	 * @return string|false
+	 */
+	public function disable_sitemap_canonical_redirect( $redirect_url, $requested_url ) {
+		$path = (string) wp_parse_url( $requested_url, PHP_URL_PATH );
+
+		if ( preg_match( '#/super-seo-sitemap\.xml/?$#', $path ) ) {
+			return false;
+		}
+
+		return $redirect_url;
+	}
+
+	/**
+	 * Replaces robots.txt with a valid, crawler-friendly version.
+	 *
+	 * @param string $output Existing output.
+	 * @param bool   $public Whether site is public.
+	 * @return string
+	 */
+	public function filter_robots_txt( $output, $public ) {
+		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'robots_enabled', 1 ) ) {
+			return $output;
+		}
+
+		if ( ! $public ) {
+			return "User-agent: *\nDisallow: /\n";
+		}
+
+		$lines = array(
+			'User-agent: *',
+			'Disallow: /wp-admin/',
+			'Allow: /wp-admin/admin-ajax.php',
+		);
+
+		if ( $this->plugin->setting( 'sitemap_enabled', 1 ) ) {
+			$lines[] = 'Sitemap: ' . home_url( '/super-seo-sitemap.xml' );
+		}
+
+		return implode( "\n", $lines ) . "\n";
+	}
+
+	/**
+	 * Builds sitemap entries.
+	 *
+	 * @return array
+	 */
+	private function entries() {
+		$entries = array(
+			array(
+				'loc'        => home_url( '/' ),
+				'lastmod'    => gmdate( 'c' ),
+				'changefreq' => 'daily',
+				'priority'   => '1.0',
+			),
+		);
+
+		$query = new WP_Query(
+			array(
+				'post_type'              => Super_SEO_Helpers::public_post_types(),
+				'post_status'            => 'publish',
+				'posts_per_page'         => 1500,
+				'fields'                 => 'ids',
+				'orderby'                => 'modified',
+				'order'                  => 'DESC',
+				'no_found_rows'          => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+			)
+		);
+
+		foreach ( $query->posts as $post_id ) {
+			$entries[] = array(
+				'loc'        => get_permalink( $post_id ),
+				'lastmod'    => get_post_modified_time( 'c', true, $post_id ),
+				'changefreq' => 'weekly',
+				'priority'   => '0.8',
+			);
+		}
+
+		$taxonomies = get_taxonomies( array( 'public' => true ), 'names' );
+		$terms      = get_terms(
+			array(
+				'taxonomy'   => $taxonomies,
+				'hide_empty' => true,
+				'number'     => 1000,
+			)
+		);
+
+		if ( ! is_wp_error( $terms ) ) {
+			foreach ( $terms as $term ) {
+				$link = get_term_link( $term );
+
+				if ( is_wp_error( $link ) ) {
+					continue;
+				}
+
+				$entries[] = array(
+					'loc'        => $link,
+					'lastmod'    => '',
+					'changefreq' => 'weekly',
+					'priority'   => '0.7',
+				);
+			}
+		}
+
+		return $entries;
+	}
+}

@@ -1,0 +1,135 @@
+.super-seo-wrap {
+	max-width: 1120px;
+}
+
+.super-seo-lead {
+	color: #475467;
+	font-size: 15px;
+	max-width: 840px;
+}
+
+.super-seo-status-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 12px;
+	margin: 18px 0;
+}
+
+.super-seo-status-card,
+.super-seo-card {
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.super-seo-status-card {
+	padding: 14px;
+}
+
+.super-seo-status-card strong {
+	display: block;
+	margin-bottom: 8px;
+}
+
+.super-seo-status-card span,
+.super-seo-status-card a {
+	color: #475467;
+}
+
+.super-seo-status-card .is-ok,
+.super-seo-inline-status.is-ok {
+	color: #11823b;
+}
+
+.super-seo-status-card .is-warn,
+.super-seo-inline-status.is-error {
+	color: #b42318;
+}
+
+.super-seo-card {
+	margin: 16px 0;
+	padding: 20px;
+}
+
+.super-seo-card h2 {
+	margin: 0 0 16px;
+	font-size: 18px;
+}
+
+.super-seo-field {
+	margin: 0 0 16px;
+}
+
+.super-seo-field label,
+.super-seo-meta-field span {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 6px;
+}
+
+.super-seo-field input[type="text"],
+.super-seo-field input[type="password"],
+.super-seo-field select,
+.super-seo-field textarea,
+.super-seo-meta-field input,
+.super-seo-meta-field textarea {
+	box-sizing: border-box;
+	max-width: 680px;
+	width: 100%;
+}
+
+.super-seo-field p,
+.super-seo-help,
+.super-seo-check small {
+	color: #667085;
+	margin: 5px 0 0;
+}
+
+.super-seo-two-col {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	max-width: 900px;
+}
+
+.super-seo-check {
+	align-items: flex-start;
+	display: grid;
+	grid-template-columns: 22px 210px minmax(0, 1fr);
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.super-seo-check span {
+	font-weight: 600;
+}
+
+.super-seo-metabox {
+	padding: 4px 0;
+}
+
+.super-seo-meta-field {
+	display: block;
+	margin: 12px 0;
+}
+
+.super-seo-inline-status {
+	display: inline-block;
+	margin-left: 10px;
+}
+
+@media (max-width: 900px) {
+	.super-seo-status-grid,
+	.super-seo-two-col {
+		grid-template-columns: 1fr;
+	}
+
+	.super-seo-check {
+		grid-template-columns: 22px minmax(0, 1fr);
+	}
+
+	.super-seo-check small {
+		grid-column: 2;
+	}
+}
