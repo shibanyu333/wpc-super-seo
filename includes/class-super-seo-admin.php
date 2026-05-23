@@ -338,6 +338,7 @@ final class Super_SEO_Admin {
 		$this->save_meta_value( $post_id, '_super_seo_title', 'text' );
 		$this->save_meta_value( $post_id, '_super_seo_description', 'textarea' );
 		$this->save_meta_value( $post_id, '_super_seo_keywords', 'keywords' );
+		$this->plugin->purge_super_rocket_cache();
 	}
 
 	/**
@@ -414,6 +415,7 @@ final class Super_SEO_Admin {
 		$this->save_term_meta_value( $term_id, '_super_seo_title', 'text' );
 		$this->save_term_meta_value( $term_id, '_super_seo_description', 'textarea' );
 		$this->save_term_meta_value( $term_id, '_super_seo_keywords', 'keywords' );
+		$this->plugin->purge_super_rocket_cache();
 	}
 
 	/**

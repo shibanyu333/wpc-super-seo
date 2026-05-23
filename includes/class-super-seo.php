@@ -173,6 +173,62 @@ final class Super_SEO {
 	public function update_settings( array $settings ) {
 		$this->settings = wp_parse_args( $settings, self::default_settings() );
 		update_option( SUPER_SEO_OPTION, $this->settings, false );
+		$this->purge_super_rocket_cache();
+	}
+
+	/**
+	 * Clears Super Rocket cache when SEO output changes.
+	 *
+	 * @return void
+	 */
+	public function purge_super_rocket_cache() {
+		if ( ! class_exists( '\SuperRocket\Plugin' ) ) {
+			return;
+		}
+
+		try {
+			$plugin = \SuperRocket\Plugin::instance();
+
+			if ( method_exists( $plugin, 'page_cache' ) ) {
+				$page_cache = $plugin->page_cache();
+
+				if ( method_exists( $page_cache, 'purge_all' ) ) {
+					$page_cache->purge_all();
+				}
+			}
+
+			$this->purge_super_rocket_static_cache();
+		} catch ( \Throwable $e ) {
+			return;
+		}
+	}
+
+	/**
+	 * Clears Super Rocket static HTML files when Apache static cache is enabled.
+	 *
+	 * @return void
+	 */
+	private function purge_super_rocket_static_cache() {
+		$root = trailingslashit( WP_CONTENT_DIR ) . 'cache/super-rocket-static';
+
+		if ( ! is_dir( $root ) ) {
+			return;
+		}
+
+		$iterator = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),
+			RecursiveIteratorIterator::CHILD_FIRST
+		);
+
+		foreach ( $iterator as $file ) {
+			if ( $file->isDir() ) {
+				@rmdir( $file->getPathname() );
+			} else {
+				@unlink( $file->getPathname() );
+			}
+		}
+
+		@rmdir( $root );
 	}
 
 	/**

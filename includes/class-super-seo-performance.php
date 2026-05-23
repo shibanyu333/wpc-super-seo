@@ -28,6 +28,13 @@ final class Super_SEO_Performance {
 	private $image_count = 0;
 
 	/**
+	 * Whether a high-priority image has already been selected.
+	 *
+	 * @var bool
+	 */
+	private $priority_image_assigned = false;
+
+	/**
 	 * Constructor.
 	 *
 	 * @param Super_SEO $plugin Plugin.
@@ -92,6 +99,10 @@ final class Super_SEO_Performance {
 			return $tag;
 		}
 
+		if ( $this->super_rocket_handles( array( 'defer_js' ) ) ) {
+			return $tag;
+		}
+
 		if ( false !== strpos( $tag, ' defer' ) || false !== strpos( $tag, ' async' ) || false !== strpos( $tag, 'type="module"' ) ) {
 			return $tag;
 		}
@@ -123,9 +134,10 @@ final class Super_SEO_Performance {
 		if ( $this->plugin->setting( 'performance_lazy_images', 1 ) ) {
 			$attr['decoding'] = $attr['decoding'] ?? 'async';
 
-			if ( 1 === $this->image_count && $this->plugin->setting( 'performance_fetchpriority', 1 ) ) {
+			if ( ! $this->will_preload_image() && ! $this->priority_image_assigned && $this->plugin->setting( 'performance_fetchpriority', 1 ) && ! $this->is_low_priority_image_attr( $attr ) ) {
 				$attr['fetchpriority'] = 'high';
 				$attr['loading']       = 'eager';
+				$this->priority_image_assigned = true;
 			} else {
 				$attr['loading'] = $attr['loading'] ?? 'lazy';
 			}
@@ -155,6 +167,10 @@ final class Super_SEO_Performance {
 			return $formats;
 		}
 
+		if ( $this->super_rocket_handles( array( 'image_webp_conversion' ) ) ) {
+			return $formats;
+		}
+
 		$formats['image/jpeg'] = 'image/webp';
 		$formats['image/png']  = 'image/webp';
 
@@ -170,6 +186,10 @@ final class Super_SEO_Performance {
 	 */
 	public function generate_webp_versions( $metadata, $attachment_id ) {
 		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_webp_uploads', 1 ) || ! is_array( $metadata ) ) {
+			return $metadata;
+		}
+
+		if ( $this->super_rocket_handles( array( 'image_webp_conversion' ) ) ) {
 			return $metadata;
 		}
 
@@ -223,6 +243,10 @@ final class Super_SEO_Performance {
 			return $image;
 		}
 
+		if ( $this->super_rocket_handles( array( 'image_webp_rewrite' ) ) ) {
+			return $image;
+		}
+
 		$map = get_post_meta( $attachment_id, '_super_seo_webp_map', true );
 
 		if ( ! is_array( $map ) || empty( $map ) ) {
@@ -267,7 +291,7 @@ final class Super_SEO_Performance {
 			return;
 		}
 
-		if ( ! $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->plugin->setting( 'performance_auto_preload_image', 1 ) && '' === $this->plugin->setting( 'performance_preload_hero_image', '' ) ) {
+		if ( ! $this->needs_html_buffer() ) {
 			return;
 		}
 
@@ -287,7 +311,7 @@ final class Super_SEO_Performance {
 
 		$html = $this->inject_preload_image( $html );
 
-		if ( $this->plugin->setting( 'performance_minify_html', 0 ) ) {
+		if ( $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) ) ) {
 			$html = $this->minify_html( $html );
 		}
 
@@ -344,10 +368,11 @@ final class Super_SEO_Performance {
 			$url = $this->discover_first_image_url( $html );
 		}
 
-		if ( '' === $url || false !== strpos( $html, 'href="' . esc_url( $url ) . '"' ) ) {
+		if ( '' === $url || $this->has_image_preload( $html, $url ) ) {
 			return $html;
 		}
 
+		$html = $this->promote_preloaded_image( $html, $url );
 		$link = sprintf( "<link rel=\"preload\" as=\"image\" href=\"%s\" fetchpriority=\"high\">\n", esc_url( $url ) );
 
 		return preg_replace( '/<\/head>/i', $link . '</head>', $html, 1 );
@@ -360,24 +385,148 @@ final class Super_SEO_Performance {
 	 * @return string
 	 */
 	private function discover_first_image_url( $html ) {
-		$patterns = array(
-			'/url\((?:\'|")?([^\'")]+?\.(?:jpe?g|png|webp|avif))(?:\'|")?\)/i',
-			'/<img[^>]+src=["\']([^"\']+?\.(?:jpe?g|png|webp|avif))["\']/i',
-		);
+		$image_tags = array();
 
-		foreach ( $patterns as $pattern ) {
-			if ( preg_match( $pattern, $html, $matches ) ) {
-				$url = html_entity_decode( $matches[1], ENT_QUOTES, get_bloginfo( 'charset' ) );
+		if ( preg_match_all( '/<img\b[^>]*>/i', $html, $matches ) ) {
+			$image_tags = $matches[0];
 
-				if ( false !== strpos( $url, 'data:' ) || false !== strpos( $url, '.svg' ) ) {
+			foreach ( $image_tags as $tag ) {
+				if ( ! preg_match( '/\b(?:wp-post-image|woocommerce-product-gallery|product-gallery|product-main|ms-pg-img|hero|featured)\b/i', $tag ) || $this->is_low_priority_image_tag( $tag ) ) {
 					continue;
 				}
 
-				return Super_SEO_Helpers::absolute_url( $url );
+				$url = $this->image_tag_src( $tag );
+
+				if ( '' !== $url ) {
+					return $url;
+				}
+			}
+		}
+
+		if ( preg_match( '/url\((?:\'|")?([^\'")]+?\.(?:jpe?g|png|webp|avif))(?:\'|")?\)/i', $html, $matches ) ) {
+			$url = $this->normalize_image_url( $matches[1] );
+
+			if ( '' !== $url ) {
+				return $url;
+			}
+		}
+
+		if ( ! empty( $image_tags ) ) {
+			foreach ( $image_tags as $tag ) {
+				if ( $this->is_low_priority_image_tag( $tag ) ) {
+					continue;
+				}
+
+				$url = $this->image_tag_src( $tag );
+
+				if ( '' !== $url ) {
+					return $url;
+				}
 			}
 		}
 
 		return '';
+	}
+
+	/**
+	 * Adds high-priority attributes to the same image we preload.
+	 *
+	 * @param string $html HTML.
+	 * @param string $url  Image URL.
+	 * @return string
+	 */
+	private function promote_preloaded_image( $html, $url ) {
+		$updated = false;
+
+		return preg_replace_callback(
+			'/<img\b[^>]*>/i',
+			function ( $matches ) use ( $url, &$updated ) {
+				$tag = $matches[0];
+
+				if ( $updated || $this->image_tag_src( $tag ) !== $url ) {
+					return $tag;
+				}
+
+				$updated = true;
+				$tag = preg_replace( '/\s(?:fetchpriority|loading|decoding)=["\'][^"\']*["\']/i', '', $tag );
+
+				return preg_replace( '/\s*\/?>$/', ' fetchpriority="high" loading="eager" decoding="async">', $tag, 1 );
+			},
+			$html
+		);
+	}
+
+	/**
+	 * Checks whether the exact image is already preloaded.
+	 *
+	 * @param string $html HTML.
+	 * @param string $url  Image URL.
+	 * @return bool
+	 */
+	private function has_image_preload( $html, $url ) {
+		if ( ! preg_match_all( '/<link\b[^>]*\brel=["\']preload["\'][^>]*>/i', $html, $matches ) ) {
+			return false;
+		}
+
+		foreach ( $matches[0] as $tag ) {
+			if ( false !== strpos( $tag, 'as="image"' ) && false !== strpos( $tag, 'href="' . esc_url( $url ) . '"' ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Returns the normalized src from an image tag.
+	 *
+	 * @param string $tag Image tag.
+	 * @return string
+	 */
+	private function image_tag_src( $tag ) {
+		if ( ! preg_match( '/\bsrc=["\']([^"\']+?\.(?:jpe?g|png|webp|avif))(?:\?[^"\']*)?["\']/i', $tag, $matches ) ) {
+			return '';
+		}
+
+		return $this->normalize_image_url( $matches[1] );
+	}
+
+	/**
+	 * Normalizes an image URL and rejects non-LCP candidates.
+	 *
+	 * @param string $url Raw URL.
+	 * @return string
+	 */
+	private function normalize_image_url( $url ) {
+		$url = html_entity_decode( trim( $url ), ENT_QUOTES, get_bloginfo( 'charset' ) );
+
+		if ( '' === $url || false !== strpos( $url, 'data:' ) || false !== strpos( $url, '.svg' ) ) {
+			return '';
+		}
+
+		return Super_SEO_Helpers::absolute_url( $url );
+	}
+
+	/**
+	 * Skips logos, icons, related thumbnails and page chrome.
+	 *
+	 * @param string $tag Image tag.
+	 * @return bool
+	 */
+	private function is_low_priority_image_tag( $tag ) {
+		return (bool) preg_match( '/logo|avatar|icon|sprite|placeholder|tracking|pixel|spinner|related|sidebar|thumbnail|thumb|payment|social/i', $tag );
+	}
+
+	/**
+	 * Skips attachment images that should not be treated as LCP.
+	 *
+	 * @param array $attr Image attributes.
+	 * @return bool
+	 */
+	private function is_low_priority_image_attr( array $attr ) {
+		$haystack = implode( ' ', array_map( 'strval', $attr ) );
+
+		return (bool) preg_match( '/logo|avatar|icon|sprite|placeholder|tracking|pixel|spinner|related|sidebar|thumbnail|thumb|payment|social/i', $haystack );
 	}
 
 	/**
@@ -465,6 +614,53 @@ final class Super_SEO_Performance {
 	 */
 	private function browser_accepts_webp() {
 		return isset( $_SERVER['HTTP_ACCEPT'] ) && false !== strpos( strtolower( sanitize_text_field( wp_unslash( $_SERVER['HTTP_ACCEPT'] ) ) ), 'image/webp' );
+	}
+
+	/**
+	 * Returns whether Super Rocket is active and already owns a performance feature.
+	 *
+	 * @param array $keys Super Rocket setting keys.
+	 * @return bool
+	 */
+	private function super_rocket_handles( array $keys ) {
+		if ( ! defined( 'SUPER_ROCKET_OPTION' ) && ! defined( 'SUPER_ROCKET_VERSION' ) ) {
+			return false;
+		}
+
+		$settings = defined( 'SUPER_ROCKET_OPTION' ) ? get_option( SUPER_ROCKET_OPTION, array() ) : array();
+
+		if ( ! is_array( $settings ) ) {
+			return false;
+		}
+
+		foreach ( $keys as $key ) {
+			if ( ! empty( $settings[ $key ] ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Returns whether Super SEO still needs a final HTML pass.
+	 *
+	 * @return bool
+	 */
+	private function needs_html_buffer() {
+		$needs_minify  = $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) );
+		$needs_preload = $this->will_preload_image();
+
+		return $needs_minify || $needs_preload;
+	}
+
+	/**
+	 * Returns whether final HTML processing will choose the LCP image.
+	 *
+	 * @return bool
+	 */
+	private function will_preload_image() {
+		return $this->plugin->setting( 'performance_auto_preload_image', 1 ) || '' !== $this->plugin->setting( 'performance_preload_hero_image', '' );
 	}
 
 	/**

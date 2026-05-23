@@ -30,3 +30,7 @@
 ## 关于 PageSpeed
 
 插件会覆盖本次报告中的核心痛点：缺 meta description、robots.txt 格式、图片加载/体积、首屏图发现、阻塞 JS、空按钮名称和部分低对比度文本。最终分数仍受主题代码、服务器缓存、真实图片压缩质量、第三方插件和 CDN 配置影响。
+
+## 与 Super Rocket 一起使用
+
+如果站点同时启用 Super Rocket，建议让 Super Rocket 负责缓存、WebP、JS 延迟和 HTML 压缩，Super SEO 负责 SEO 标签、Schema、Sitemap、AI 生成和首屏图片兜底提示。Super SEO 保存设置、文章 SEO 或分类 SEO 后会自动尝试清理 Super Rocket 缓存，避免前台继续显示旧标题或旧描述。
