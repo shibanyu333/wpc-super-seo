@@ -35,6 +35,20 @@ final class Super_SEO {
 	private $ai;
 
 	/**
+	 * Local audit service.
+	 *
+	 * @var Super_SEO_Audit|null
+	 */
+	private $audit = null;
+
+	/**
+	 * AI automation service.
+	 *
+	 * @var Super_SEO_Automation|null
+	 */
+	private $automation = null;
+
+	/**
 	 * Returns singleton instance.
 	 *
 	 * @return Super_SEO
@@ -83,9 +97,12 @@ final class Super_SEO {
 		return array(
 			'enabled'                          => 1,
 			'auto_meta_description'            => 1,
+			'output_meta_keywords'             => 0,
 			'default_keywords'                 => '',
 			'default_description'              => '',
 			'site_brand_name'                  => get_bloginfo( 'name' ),
+			'pagespeed_mode'                   => 'balanced',
+			'audit_urls'                       => '',
 			'ai_provider'                      => 'deepseek',
 			'ai_endpoint'                      => 'https://api.deepseek.com/chat/completions',
 			'ai_model'                         => 'deepseek-chat',
@@ -93,6 +110,12 @@ final class Super_SEO {
 			'ai_temperature'                   => '0.4',
 			'ai_language'                      => 'zh-CN',
 			'ai_tone'                          => '专业、自然、适合 Google SEO',
+			'ai_article_strategy'              => 'strict',
+			'ai_publish_mode'                  => 'draft',
+			'ai_article_frequency'             => 'manual',
+			'ai_article_category'              => 0,
+			'ai_article_min_words'             => 500,
+			'ai_direct_publish_enabled'        => 0,
 			'sitemap_enabled'                  => 1,
 			'robots_enabled'                   => 1,
 			'schema_enabled'                   => 1,
@@ -103,11 +126,11 @@ final class Super_SEO {
 			'performance_lazy_images'          => 1,
 			'performance_fetchpriority'        => 1,
 			'performance_preload_hero_image'   => '',
-			'performance_auto_preload_image'   => 1,
+			'performance_auto_preload_image'   => 0,
 			'performance_webp_uploads'         => 1,
 			'performance_webp_rewrite'         => 1,
 			'performance_minify_html'          => 0,
-			'performance_accessibility_fixes'  => 1,
+			'performance_accessibility_fixes'  => 0,
 			'performance_security_headers'     => 1,
 		);
 	}
@@ -129,12 +152,15 @@ final class Super_SEO {
 	public function load_modules() {
 		load_plugin_textdomain( 'super-seo', false, dirname( plugin_basename( SUPER_SEO_FILE ) ) . '/languages' );
 
+		$this->audit      = new Super_SEO_Audit( $this );
+		$this->automation = new Super_SEO_Automation( $this, $this->ai );
+
 		new Super_SEO_Meta( $this );
 		new Super_SEO_Sitemap( $this );
 		new Super_SEO_Performance( $this );
 
 		if ( is_admin() ) {
-			new Super_SEO_Admin( $this, $this->ai );
+			new Super_SEO_Admin( $this, $this->ai, $this->audit, $this->automation );
 		}
 	}
 
@@ -247,5 +273,23 @@ final class Super_SEO {
 	 */
 	public function ai() {
 		return $this->ai;
+	}
+
+	/**
+	 * Returns the local audit service.
+	 *
+	 * @return Super_SEO_Audit|null
+	 */
+	public function audit() {
+		return $this->audit;
+	}
+
+	/**
+	 * Returns the automation service.
+	 *
+	 * @return Super_SEO_Automation|null
+	 */
+	public function automation() {
+		return $this->automation;
 	}
 }

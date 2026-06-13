@@ -28,9 +28,22 @@ final class Super_SEO_Meta {
 	public function __construct( Super_SEO $plugin ) {
 		$this->plugin = $plugin;
 
-		remove_action( 'wp_head', 'rel_canonical' );
+		add_action( 'wp_head', array( $this, 'maybe_disable_core_canonical' ), 0 );
 		add_filter( 'pre_get_document_title', array( $this, 'filter_document_title' ), 20 );
-		add_action( 'wp_head', array( $this, 'output_head' ), 3 );
+		add_action( 'wp_head', array( $this, 'output_head' ), 99 );
+	}
+
+	/**
+	 * Disables WordPress core canonical only while Super SEO is actively outputting one.
+	 *
+	 * @return void
+	 */
+	public function maybe_disable_core_canonical() {
+		if ( ! $this->plugin->enabled() || is_admin() || is_feed() || is_robots() ) {
+			return;
+		}
+
+		remove_action( 'wp_head', 'rel_canonical' );
 	}
 
 	/**
@@ -70,7 +83,7 @@ final class Super_SEO_Meta {
 			printf( "<meta name=\"description\" content=\"%s\">\n", esc_attr( $description ) );
 		}
 
-		if ( '' !== $keywords ) {
+		if ( '' !== $keywords && $this->plugin->setting( 'output_meta_keywords', 0 ) ) {
 			printf( "<meta name=\"keywords\" content=\"%s\">\n", esc_attr( $keywords ) );
 		}
 
@@ -225,6 +238,10 @@ final class Super_SEO_Meta {
 			return get_permalink( get_queried_object_id() );
 		}
 
+		if ( is_paged() ) {
+			return get_pagenum_link( max( 1, (int) get_query_var( 'paged' ) ) );
+		}
+
 		if ( is_category() || is_tag() || is_tax() ) {
 			$link = get_term_link( get_queried_object() );
 
@@ -290,6 +307,7 @@ final class Super_SEO_Meta {
 
 			if ( 'Product' === $type ) {
 				$item['name'] = $title;
+				$item         = array_merge( $item, $this->product_schema_data( $canonical ) );
 			} else {
 				$item['headline'] = $title;
 			}
@@ -325,8 +343,82 @@ final class Super_SEO_Meta {
 
 		printf(
 			"<script type=\"application/ld+json\">%s</script>\n",
-			wp_json_encode( $schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+			Super_SEO_Helpers::json_for_html_script( $schema )
 		);
+	}
+
+	/**
+	 * Returns WooCommerce-backed Product schema data when available.
+	 *
+	 * @param string $canonical Canonical URL.
+	 * @return array
+	 */
+	private function product_schema_data( $canonical ) {
+		if ( ! function_exists( 'wc_get_product' ) ) {
+			return array();
+		}
+
+		$product = wc_get_product( get_queried_object_id() );
+
+		if ( ! $product ) {
+			return array();
+		}
+
+		$data = array();
+		$sku  = $product->get_sku();
+
+		if ( '' !== $sku ) {
+			$data['sku'] = $sku;
+		}
+
+		$offers = array(
+			'@type'         => 'Offer',
+			'url'           => $canonical,
+			'itemCondition' => 'https://schema.org/NewCondition',
+			'availability'  => $this->product_availability( $product ),
+		);
+
+		$price = $product->get_price();
+
+		if (
+			'' !== $price
+			&& function_exists( 'get_woocommerce_currency' )
+			&& function_exists( 'wc_format_decimal' )
+			&& function_exists( 'wc_get_price_decimals' )
+		) {
+			$offers['price']         = wc_format_decimal( $price, wc_get_price_decimals() );
+			$offers['priceCurrency'] = get_woocommerce_currency();
+		}
+
+		$data['offers'] = $offers;
+
+		if ( $product->get_average_rating() > 0 && $product->get_review_count() > 0 ) {
+			$data['aggregateRating'] = array(
+				'@type'       => 'AggregateRating',
+				'ratingValue' => (string) $product->get_average_rating(),
+				'reviewCount' => (int) $product->get_review_count(),
+			);
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Maps WooCommerce stock state to Schema.org availability.
+	 *
+	 * @param WC_Product $product Product.
+	 * @return string
+	 */
+	private function product_availability( $product ) {
+		if ( $product->is_in_stock() ) {
+			return 'https://schema.org/InStock';
+		}
+
+		if ( $product->backorders_allowed() ) {
+			return 'https://schema.org/BackOrder';
+		}
+
+		return 'https://schema.org/OutOfStock';
 	}
 
 	/**

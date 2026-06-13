@@ -26,6 +26,8 @@ define( 'SUPER_SEO_OPTION', 'super_seo_settings' );
 
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-helpers.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-ai.php';
+require_once SUPER_SEO_PATH . 'includes/class-super-seo-audit.php';
+require_once SUPER_SEO_PATH . 'includes/class-super-seo-automation.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-admin.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-meta.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-performance.php';

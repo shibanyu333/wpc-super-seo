@@ -28,14 +28,32 @@ final class Super_SEO_Admin {
 	private $ai;
 
 	/**
+	 * Local audit service.
+	 *
+	 * @var Super_SEO_Audit
+	 */
+	private $audit;
+
+	/**
+	 * AI automation service.
+	 *
+	 * @var Super_SEO_Automation
+	 */
+	private $automation;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param Super_SEO    $plugin Plugin.
-	 * @param Super_SEO_AI $ai     AI client.
+	 * @param Super_SEO            $plugin     Plugin.
+	 * @param Super_SEO_AI         $ai         AI client.
+	 * @param Super_SEO_Audit      $audit      Audit service.
+	 * @param Super_SEO_Automation $automation Automation service.
 	 */
-	public function __construct( Super_SEO $plugin, Super_SEO_AI $ai ) {
-		$this->plugin = $plugin;
-		$this->ai     = $ai;
+	public function __construct( Super_SEO $plugin, Super_SEO_AI $ai, Super_SEO_Audit $audit, Super_SEO_Automation $automation ) {
+		$this->plugin     = $plugin;
+		$this->ai         = $ai;
+		$this->audit      = $audit;
+		$this->automation = $automation;
 
 		add_action( 'admin_menu', array( $this, 'add_menu' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
@@ -44,6 +62,12 @@ final class Super_SEO_Admin {
 		add_action( 'save_post', array( $this, 'save_post_meta' ) );
 		add_action( 'wp_ajax_super_seo_generate_meta', array( $this, 'ajax_generate_meta' ) );
 		add_action( 'wp_ajax_super_seo_test_ai', array( $this, 'ajax_test_ai' ) );
+		add_action( 'wp_ajax_super_seo_run_local_audit', array( $this, 'ajax_run_local_audit' ) );
+		add_action( 'wp_ajax_super_seo_generate_product_profile', array( $this, 'ajax_generate_product_profile' ) );
+		add_action( 'wp_ajax_super_seo_generate_meta_batch', array( $this, 'ajax_generate_meta_batch' ) );
+		add_action( 'wp_ajax_super_seo_apply_meta_suggestions', array( $this, 'ajax_apply_meta_suggestions' ) );
+		add_action( 'wp_ajax_super_seo_generate_article', array( $this, 'ajax_generate_article' ) );
+		add_action( 'wp_ajax_super_seo_run_article_cron', array( $this, 'ajax_generate_article' ) );
 		add_action( 'init', array( $this, 'register_term_hooks' ), 30 );
 	}
 
@@ -87,16 +111,18 @@ final class Super_SEO_Admin {
 		wp_localize_script(
 			'super-seo-admin',
 			'SuperSEO',
-			array(
-				'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
-				'nonce'        => wp_create_nonce( 'super_seo_admin' ),
-				'generating'   => 'AI 正在生成，请稍等...',
-				'generated'    => '已生成，可检查后保存。',
-				'testing'      => '正在测试 AI 连接...',
-				'testSuccess'  => 'AI 连接正常。',
-				'errorPrefix'  => '出错：',
-			)
-		);
+				array(
+					'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
+					'nonce'        => wp_create_nonce( 'super_seo_admin' ),
+					'generating'   => 'AI 正在生成，请稍等...',
+					'generated'    => '已生成，可检查后保存。',
+					'testing'      => '正在测试 AI 连接...',
+					'testSuccess'  => 'AI 连接正常。',
+					'working'      => '正在处理，请稍等...',
+					'actionDone'   => '操作完成，正在刷新结果...',
+					'errorPrefix'  => '出错：',
+				)
+			);
 	}
 
 	/**
@@ -113,6 +139,10 @@ final class Super_SEO_Admin {
 		$sitemap_url = home_url( '/super-seo-sitemap.xml' );
 		$robots_url  = home_url( '/robots.txt' );
 		$has_key     = '' !== trim( (string) $settings['ai_api_key'] );
+		$audit       = $this->audit->cached_report();
+		$profile     = $this->automation->product_profile();
+		$suggestions = get_transient( Super_SEO_Automation::META_SUGGESTIONS_TRANSIENT );
+		$suggestions = is_array( $suggestions ) ? $suggestions : array();
 		?>
 		<div class="wrap super-seo-wrap">
 			<h1>超级SEO智能优化</h1>
@@ -151,7 +181,8 @@ final class Super_SEO_Admin {
 					<?php $this->checkbox_field( 'auto_meta_description', '自动补齐 Meta Description', '页面没有手写描述时，自动从正文、分类说明或站点信息生成。', $settings ); ?>
 					<?php $this->text_field( 'site_brand_name', '品牌/站点名称', '用于 AI 和结构化数据。', $settings ); ?>
 					<?php $this->textarea_field( 'default_description', '默认全站描述', '页面没有内容可提取时使用，建议 120-155 字。', $settings, 3 ); ?>
-					<?php $this->textarea_field( 'default_keywords', '默认关键词', '用英文逗号或中文逗号分隔，作为兜底关键词。', $settings, 2 ); ?>
+					<?php $this->textarea_field( 'default_keywords', '默认焦点关键词', '用于 AI 理解页面主题和生成建议，不建议堆到 meta keywords。', $settings, 2 ); ?>
+					<?php $this->checkbox_field( 'output_meta_keywords', '兼容旧式 meta keywords', '默认关闭。Google 不使用该标签做网页排名，开启仅用于少数旧系统兼容。', $settings ); ?>
 					<?php $this->checkbox_field( 'schema_enabled', '输出结构化数据 Schema', '自动输出 WebSite、Article、Product、CollectionPage 等基础 JSON-LD。', $settings ); ?>
 				</section>
 
@@ -161,7 +192,7 @@ final class Super_SEO_Admin {
 						<?php $this->select_field( 'ai_provider', '模型服务商', array( 'deepseek' => 'DeepSeek', 'openai-compatible' => 'OpenAI 兼容接口', 'custom' => '自定义' ), $settings ); ?>
 						<?php $this->text_field( 'ai_model', '模型名称', 'DeepSeek 默认 deepseek-chat。', $settings ); ?>
 					</div>
-					<?php $this->text_field( 'ai_endpoint', '接口地址', '需兼容 /chat/completions 格式。', $settings ); ?>
+					<?php $this->text_field( 'ai_endpoint', '接口地址', '需使用 HTTPS，并兼容 /chat/completions 格式。', $settings ); ?>
 					<div class="super-seo-field">
 						<label for="super-seo-ai-api-key">API Key</label>
 						<input id="super-seo-ai-api-key" type="password" name="ai_api_key" value="" placeholder="<?php echo $has_key ? esc_attr( '已保存，留空表示不修改' ) : esc_attr( 'sk-...' ); ?>" autocomplete="new-password">
@@ -177,13 +208,42 @@ final class Super_SEO_Admin {
 					<span class="super-seo-inline-status" data-super-seo-test-status></span>
 				</section>
 
+				<section class="super-seo-card" data-super-seo-box>
+					<h2>AI 产品画像与内容自动化</h2>
+					<p class="super-seo-help">优先读取 WooCommerce 产品、分类、属性和现有 SEO Meta，生成产品主题画像，再用于批量 Meta 和文章生成。</p>
+					<div class="super-seo-actions">
+						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_generate_product_profile">生成/更新产品画像</button>
+						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_generate_meta_batch">生成批量 Meta 建议</button>
+						<button type="button" class="button button-primary super-seo-action-button" data-super-seo-action="super_seo_apply_meta_suggestions">应用当前 Meta 建议</button>
+					</div>
+					<span class="super-seo-inline-status" data-super-seo-status></span>
+					<?php $this->render_product_profile( $profile ); ?>
+					<?php $this->render_meta_suggestions( $suggestions ); ?>
+
+					<div class="super-seo-two-col">
+						<?php $this->select_field( 'ai_article_strategy', '文章策略', array( 'strict' => '严格产品相关', 'education' => '行业科普', 'growth' => '增长长尾词' ), $settings ); ?>
+						<?php $this->select_field( 'ai_publish_mode', '发布模式', array( 'draft' => '生成草稿', 'future' => '定时发布', 'publish' => '直接发布' ), $settings ); ?>
+					</div>
+					<div class="super-seo-two-col">
+						<?php $this->select_field( 'ai_article_frequency', '自动文章频率', array( 'manual' => '手动', 'daily' => '每天', 'weekly' => '每周' ), $settings ); ?>
+						<?php $this->text_field( 'ai_article_category', '文章分类 ID', '可留空；填写分类 ID 后自动文章会归入该分类。', $settings ); ?>
+					</div>
+					<?php $this->text_field( 'ai_article_min_words', '文章最低字数', '低于该字数会被质量门禁拒绝。', $settings ); ?>
+					<?php $this->checkbox_field( 'ai_direct_publish_enabled', '允许直接发布', '开启后发布模式选择“直接发布”才会生效；否则强制阻止。', $settings ); ?>
+					<div class="super-seo-actions">
+						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_generate_article">按当前设置生成一篇文章</button>
+						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_run_article_cron">手动触发一次定时任务</button>
+					</div>
+				</section>
+
 				<section class="super-seo-card">
 					<h2>PageSpeed 优化</h2>
+					<?php $this->select_field( 'pagespeed_mode', '优化模式', array( 'safe' => '安全：只做基础 SEO 与图片属性', 'balanced' => '平衡：WebP、JS defer、手动首图 preload', 'aggressive' => '激进：自动 preload、HTML 压缩、主题补丁' ), $settings ); ?>
 					<?php $this->checkbox_field( 'robots_enabled', '修复并输出有效 robots.txt', '自动加入 Sitemap，并避免 robots.txt 格式错误导致 Lighthouse 扣分。', $settings ); ?>
 					<?php $this->checkbox_field( 'sitemap_enabled', '启用 XML 站点地图', '生成 /super-seo-sitemap.xml。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_lazy_images', '图片懒加载与 async 解码', '为媒体库图片补 loading、decoding、alt 等属性。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_fetchpriority', '首张图片高优先级', '首屏图片使用 fetchpriority=high，降低 LCP 风险。', $settings ); ?>
-					<?php $this->checkbox_field( 'performance_auto_preload_image', '自动预加载首屏背景图/首图', '对报告里的 CSS 背景大图尤其有用。', $settings ); ?>
+					<?php $this->checkbox_field( 'performance_auto_preload_image', '自动预加载首屏背景图/首图', '会扫描前台 HTML，建议只在 PageSpeed 明确提示 LCP 图片发现较慢时开启。', $settings ); ?>
 					<?php $this->text_field( 'performance_preload_hero_image', '指定首屏大图 URL', '可填写 PageSpeed 报告里的 LCP/首屏图片 URL，留空则自动识别。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_webp_uploads', '新上传图片自动生成 WebP', '依赖服务器 GD/Imagick 支持 WebP。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_webp_rewrite', '优先给支持的浏览器返回 WebP', '有 WebP 文件时自动替换媒体库图片 URL。', $settings ); ?>
@@ -191,9 +251,15 @@ final class Super_SEO_Admin {
 					<?php $this->textarea_field( 'performance_defer_exclusions', 'JS 延迟排除列表', '每项用逗号分隔。jQuery、WooCommerce 等默认排除，避免破坏交互。', $settings, 3 ); ?>
 					<?php $this->checkbox_field( 'performance_disable_emojis', '关闭 WordPress Emoji 资源', '减少无用脚本和 DNS 请求。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_disable_embeds', '关闭 Embed 资源', '不用文章嵌入预览时建议开启。', $settings ); ?>
-					<?php $this->checkbox_field( 'performance_accessibility_fixes', '启用报告专项可访问性补丁', '修复空按钮名称、部分低对比度文本等常见 Lighthouse 扣分。', $settings ); ?>
+					<?php $this->checkbox_field( 'performance_accessibility_fixes', '启用当前主题专项可访问性补丁', '包含少量站点定制 CSS/JS，通用站点建议保持关闭。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_security_headers', '输出基础安全响应头', '补充 X-Content-Type-Options、Referrer-Policy 等轻量安全头。', $settings ); ?>
 					<?php $this->checkbox_field( 'performance_minify_html', '压缩前台 HTML', '可能与少数主题冲突，建议先在测试环境开启。', $settings ); ?>
+					<?php $this->textarea_field( 'audit_urls', '本地检测附加 URL', '每行一个当前站点 URL。留空时自动检测首页、近期产品和产品分类。', $settings, 3 ); ?>
+					<div class="super-seo-actions" data-super-seo-box>
+						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_run_local_audit">立即运行本地检测</button>
+						<span class="super-seo-inline-status" data-super-seo-status></span>
+					</div>
+					<?php $this->render_audit_report( $audit ); ?>
 				</section>
 
 				<?php submit_button( '保存全部设置', 'primary large' ); ?>
@@ -220,6 +286,7 @@ final class Super_SEO_Admin {
 		$checkbox = array(
 			'enabled',
 			'auto_meta_description',
+			'output_meta_keywords',
 			'sitemap_enabled',
 			'robots_enabled',
 			'schema_enabled',
@@ -227,14 +294,15 @@ final class Super_SEO_Admin {
 			'performance_disable_embeds',
 			'performance_defer_js',
 			'performance_lazy_images',
-			'performance_fetchpriority',
-			'performance_auto_preload_image',
-			'performance_webp_uploads',
-			'performance_webp_rewrite',
-			'performance_minify_html',
-			'performance_accessibility_fixes',
-			'performance_security_headers',
-		);
+				'performance_fetchpriority',
+				'performance_auto_preload_image',
+				'performance_webp_uploads',
+				'performance_webp_rewrite',
+				'performance_minify_html',
+				'performance_accessibility_fixes',
+				'performance_security_headers',
+				'ai_direct_publish_enabled',
+			);
 
 		foreach ( $defaults as $key => $default ) {
 			if ( in_array( $key, $checkbox, true ) ) {
@@ -246,16 +314,23 @@ final class Super_SEO_Admin {
 		}
 
 		$new['ai_provider']                    = sanitize_key( $new['ai_provider'] );
-		$new['ai_endpoint']                    = esc_url_raw( $new['ai_endpoint'] );
-		$new['ai_model']                       = sanitize_text_field( $new['ai_model'] );
-		$new['ai_temperature']                 = (string) max( 0, min( 1, (float) $new['ai_temperature'] ) );
-		$new['ai_language']                    = sanitize_text_field( $new['ai_language'] );
-		$new['ai_tone']                        = sanitize_textarea_field( $new['ai_tone'] );
-		$new['site_brand_name']                = sanitize_text_field( $new['site_brand_name'] );
-		$new['default_description']            = sanitize_textarea_field( $new['default_description'] );
-		$new['default_keywords']               = Super_SEO_Helpers::normalize_keywords( sanitize_textarea_field( $new['default_keywords'] ), 12 );
-		$new['performance_preload_hero_image'] = esc_url_raw( $new['performance_preload_hero_image'] );
-		$new['performance_defer_exclusions']   = sanitize_textarea_field( $new['performance_defer_exclusions'] );
+			$new['ai_endpoint']                    = esc_url_raw( $new['ai_endpoint'] );
+			$new['ai_model']                       = sanitize_text_field( $new['ai_model'] );
+			$new['ai_temperature']                 = (string) max( 0, min( 1, (float) $new['ai_temperature'] ) );
+			$new['ai_language']                    = sanitize_text_field( $new['ai_language'] );
+			$new['ai_tone']                        = sanitize_textarea_field( $new['ai_tone'] );
+			$new['ai_article_strategy']            = $this->sanitize_choice( $new['ai_article_strategy'], array( 'strict', 'education', 'growth' ), 'strict' );
+			$new['ai_publish_mode']                = $this->sanitize_choice( $new['ai_publish_mode'], array( 'draft', 'future', 'publish' ), 'draft' );
+			$new['ai_article_frequency']           = $this->sanitize_choice( $new['ai_article_frequency'], array( 'manual', 'daily', 'weekly' ), 'manual' );
+			$new['ai_article_category']            = absint( $new['ai_article_category'] );
+			$new['ai_article_min_words']           = (string) max( 80, min( 3000, (int) $new['ai_article_min_words'] ) );
+			$new['site_brand_name']                = sanitize_text_field( $new['site_brand_name'] );
+			$new['default_description']            = sanitize_textarea_field( $new['default_description'] );
+			$new['default_keywords']               = Super_SEO_Helpers::normalize_keywords( sanitize_textarea_field( $new['default_keywords'] ), 12 );
+			$new['pagespeed_mode']                 = $this->sanitize_choice( $new['pagespeed_mode'], array( 'safe', 'balanced', 'aggressive' ), 'balanced' );
+			$new['audit_urls']                     = sanitize_textarea_field( $new['audit_urls'] );
+			$new['performance_preload_hero_image'] = esc_url_raw( $new['performance_preload_hero_image'] );
+			$new['performance_defer_exclusions']   = sanitize_textarea_field( $new['performance_defer_exclusions'] );
 
 		$posted_key = isset( $_POST['ai_api_key'] ) ? trim( (string) wp_unslash( $_POST['ai_api_key'] ) ) : '';
 
@@ -267,8 +342,9 @@ final class Super_SEO_Admin {
 			$new['ai_api_key'] = $old['ai_api_key'];
 		}
 
-		$this->plugin->update_settings( $new );
-		flush_rewrite_rules();
+			$this->plugin->update_settings( $new );
+			$this->automation->ensure_article_cron();
+			flush_rewrite_rules();
 
 		wp_safe_redirect( add_query_arg( 'settings-updated', '1', admin_url( 'admin.php?page=super-seo' ) ) );
 		exit;
@@ -309,7 +385,7 @@ final class Super_SEO_Admin {
 			<p class="super-seo-help">留空时插件会自动生成兜底内容；想更精准，可以点击 AI 生成后再微调。</p>
 			<?php $this->meta_input( '_super_seo_title', 'SEO标题', $title, '建议 50-65 字符', 'title' ); ?>
 			<?php $this->meta_textarea( '_super_seo_description', 'SEO描述', $description, '建议 120-155 字符', 'description' ); ?>
-			<?php $this->meta_input( '_super_seo_keywords', 'SEO关键词', $keywords, '用逗号分隔，5-8 个即可', 'keywords' ); ?>
+			<?php $this->meta_input( '_super_seo_keywords', '焦点关键词', $keywords, '用于 AI 和内容方向，5-8 个即可', 'keywords' ); ?>
 			<button type="button" class="button button-secondary super-seo-ai-button" data-object-type="post" data-object-id="<?php echo esc_attr( $post->ID ); ?>">AI一键生成</button>
 			<span class="super-seo-inline-status" data-super-seo-status></span>
 		</div>
@@ -359,7 +435,7 @@ final class Super_SEO_Admin {
 			<textarea id="super-seo-term-description" name="_super_seo_description" rows="3" data-super-seo-field="description"></textarea>
 		</div>
 		<div class="form-field super-seo-term-fields">
-			<label for="super-seo-term-keywords">超级SEO关键词</label>
+			<label for="super-seo-term-keywords">超级SEO焦点关键词</label>
 			<input id="super-seo-term-keywords" name="_super_seo_keywords" type="text" data-super-seo-field="keywords">
 		</div>
 		<?php
@@ -386,10 +462,10 @@ final class Super_SEO_Admin {
 			<td><textarea id="super-seo-term-description" name="_super_seo_description" rows="3" data-super-seo-field="description"><?php echo esc_textarea( $description ); ?></textarea></td>
 		</tr>
 		<tr class="form-field super-seo-term-fields">
-			<th scope="row"><label for="super-seo-term-keywords">超级SEO关键词</label></th>
+			<th scope="row"><label for="super-seo-term-keywords">超级SEO焦点关键词</label></th>
 			<td>
 				<input id="super-seo-term-keywords" name="_super_seo_keywords" type="text" value="<?php echo esc_attr( $keywords ); ?>" data-super-seo-field="keywords">
-				<p class="description">用逗号分隔，5-8 个即可。</p>
+				<p class="description">用于 AI 和内容方向，5-8 个即可。</p>
 				<button type="button" class="button button-secondary super-seo-ai-button" data-object-type="term" data-object-id="<?php echo esc_attr( $term->term_id ); ?>">AI一键生成</button>
 				<span class="super-seo-inline-status" data-super-seo-status></span>
 			</td>
@@ -433,17 +509,21 @@ final class Super_SEO_Admin {
 			if ( ! current_user_can( 'edit_post', $id ) ) {
 				wp_send_json_error( '没有权限编辑该内容。' );
 			}
-
-			$result = $this->ai->generate_for_post( $id );
 		} elseif ( 'term' === $type ) {
 			if ( ! current_user_can( 'manage_categories' ) && ! current_user_can( 'manage_woocommerce' ) ) {
 				wp_send_json_error( '没有权限编辑该分类。' );
 			}
-
-			$result = $this->ai->generate_for_term( $id );
 		} else {
 			wp_send_json_error( '未知对象类型。' );
 		}
+
+		$rate_limit = $this->rate_limit_ai_action( 'generate', 20, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = 'post' === $type ? $this->ai->generate_for_post( $id ) : $this->ai->generate_for_term( $id );
 
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( $result->get_error_message() );
@@ -464,7 +544,128 @@ final class Super_SEO_Admin {
 			wp_send_json_error( '没有权限。' );
 		}
 
+		$rate_limit = $this->rate_limit_ai_action( 'test', 5, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
 		$result = $this->ai->test_connection();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( $result->get_error_message() );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX local audit.
+	 *
+	 * @return void
+	 */
+	public function ajax_run_local_audit() {
+		$this->check_manage_options_ajax();
+
+		$rate_limit = $this->rate_limit_ai_action( 'audit', 5, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = $this->audit->run();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( $result->get_error_message() );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX product profile generation.
+	 *
+	 * @return void
+	 */
+	public function ajax_generate_product_profile() {
+		$this->check_manage_options_ajax();
+
+		$rate_limit = $this->rate_limit_ai_action( 'profile', 3, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = $this->automation->generate_product_profile();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( $result->get_error_message() );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX batched meta suggestions.
+	 *
+	 * @return void
+	 */
+	public function ajax_generate_meta_batch() {
+		$this->check_manage_options_ajax();
+
+		$rate_limit = $this->rate_limit_ai_action( 'meta_batch', 3, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = $this->automation->generate_meta_suggestions();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( $result->get_error_message() );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX apply generated meta suggestions.
+	 *
+	 * @return void
+	 */
+	public function ajax_apply_meta_suggestions() {
+		$this->check_manage_options_ajax();
+
+		$rate_limit = $this->rate_limit_ai_action( 'apply_meta', 10, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = $this->automation->apply_meta_suggestions();
+
+		if ( is_wp_error( $result ) ) {
+			wp_send_json_error( $result->get_error_message() );
+		}
+
+		wp_send_json_success( $result );
+	}
+
+	/**
+	 * AJAX article generation.
+	 *
+	 * @return void
+	 */
+	public function ajax_generate_article() {
+		$this->check_manage_options_ajax();
+
+		$rate_limit = $this->rate_limit_ai_action( 'article', 3, MINUTE_IN_SECONDS );
+
+		if ( is_wp_error( $rate_limit ) ) {
+			wp_send_json_error( $rate_limit->get_error_message() );
+		}
+
+		$result = $this->automation->generate_article();
 
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( $result->get_error_message() );
@@ -563,6 +764,147 @@ final class Super_SEO_Admin {
 		}
 
 		return Super_SEO_Helpers::limit_text( sanitize_text_field( $value ), 80 );
+	}
+
+	/**
+	 * Applies a small per-user throttle to paid AI calls.
+	 *
+	 * @param string $action Action key.
+	 * @param int    $limit  Max calls.
+	 * @param int    $window Window in seconds.
+	 * @return true|WP_Error
+	 */
+	private function rate_limit_ai_action( $action, $limit, $window ) {
+		$user_id = get_current_user_id();
+
+		if ( ! $user_id ) {
+			return true;
+		}
+
+		$key   = 'super_seo_ai_' . sanitize_key( $action ) . '_' . (int) $user_id;
+		$count = (int) get_transient( $key );
+
+		if ( $count >= $limit ) {
+			return new WP_Error( 'super_seo_ai_rate_limited', 'AI 请求过于频繁，请稍后再试。' );
+		}
+
+		set_transient( $key, $count + 1, $window );
+
+		return true;
+	}
+
+	/**
+	 * Checks admin AJAX nonce and capability.
+	 *
+	 * @return void
+	 */
+	private function check_manage_options_ajax() {
+		check_ajax_referer( 'super_seo_admin', 'nonce' );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( '没有权限。' );
+		}
+	}
+
+	/**
+	 * Sanitizes a select value.
+	 *
+	 * @param string $value   Value.
+	 * @param array  $allowed Allowed values.
+	 * @param string $default Default.
+	 * @return string
+	 */
+	private function sanitize_choice( $value, array $allowed, $default ) {
+		$value = sanitize_key( $value );
+
+		return in_array( $value, $allowed, true ) ? $value : $default;
+	}
+
+	/**
+	 * Renders cached product profile.
+	 *
+	 * @param array $profile Profile.
+	 * @return void
+	 */
+	private function render_product_profile( array $profile ) {
+		if ( empty( $profile ) ) {
+			echo '<p class="super-seo-help">尚未生成产品画像。</p>';
+			return;
+		}
+		?>
+		<div class="super-seo-result-box">
+			<strong>产品画像</strong>
+			<p>核心关键词：<?php echo esc_html( implode( ', ', array_slice( (array) ( $profile['core_keywords'] ?? array() ), 0, 8 ) ) ); ?></p>
+			<p>文章方向：<?php echo esc_html( implode( ' / ', array_slice( (array) ( $profile['article_angles'] ?? array() ), 0, 5 ) ) ); ?></p>
+			<?php if ( ! empty( $profile['generated_at'] ) ) : ?>
+				<small>更新时间：<?php echo esc_html( date_i18n( 'Y-m-d H:i', (int) $profile['generated_at'] ) ); ?></small>
+			<?php endif; ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Renders cached meta suggestions.
+	 *
+	 * @param array $suggestions Suggestions.
+	 * @return void
+	 */
+	private function render_meta_suggestions( array $suggestions ) {
+		if ( empty( $suggestions ) ) {
+			echo '<p class="super-seo-help">尚无批量 Meta 建议。</p>';
+			return;
+		}
+		?>
+		<div class="super-seo-result-box">
+			<strong>当前 Meta 建议（最多显示 5 条）</strong>
+			<?php foreach ( array_slice( $suggestions, 0, 5 ) as $suggestion ) : ?>
+				<div class="super-seo-suggestion-row">
+					<b><?php echo esc_html( $suggestion['label'] ?? $suggestion['title'] ?? '内容' ); ?></b>
+					<?php if ( ! empty( $suggestion['error'] ) ) : ?>
+						<p class="is-error"><?php echo esc_html( $suggestion['error'] ); ?></p>
+					<?php else : ?>
+						<p>标题：<?php echo esc_html( $suggestion['before']['title'] ?? '' ); ?> → <?php echo esc_html( $suggestion['after']['title'] ?? '' ); ?></p>
+						<p>描述：<?php echo esc_html( $suggestion['after']['description'] ?? '' ); ?></p>
+					<?php endif; ?>
+				</div>
+			<?php endforeach; ?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Renders cached local audit report.
+	 *
+	 * @param array $report Report.
+	 * @return void
+	 */
+	private function render_audit_report( array $report ) {
+		if ( empty( $report ) ) {
+			echo '<p class="super-seo-help">尚未运行本地 PageSpeed/SEO 检测。</p>';
+			return;
+		}
+
+		$summary = $report['summary'] ?? array();
+		?>
+		<div class="super-seo-result-box">
+			<strong>本地检测结果</strong>
+			<p>平均分：<?php echo esc_html( $summary['average_score'] ?? 0 ); ?> / 100，检测 URL：<?php echo esc_html( $summary['urls'] ?? 0 ); ?> 个</p>
+			<?php foreach ( array_slice( (array) ( $report['results'] ?? array() ), 0, 6 ) as $result ) : ?>
+				<div class="super-seo-audit-row">
+					<b><?php echo esc_html( $result['score'] ?? 0 ); ?>/100</b>
+					<a href="<?php echo esc_url( $result['url'] ?? '' ); ?>" target="_blank" rel="noopener"><?php echo esc_html( $result['url'] ?? '' ); ?></a>
+					<ul>
+						<?php foreach ( array_slice( (array) ( $result['checks'] ?? array() ), 0, 5 ) as $check ) : ?>
+							<li><?php echo esc_html( '[' . ( $check['type'] ?? 'needs review' ) . '] ' . ( $check['message'] ?? '' ) ); ?></li>
+						<?php endforeach; ?>
+					</ul>
+				</div>
+			<?php endforeach; ?>
+			<?php if ( ! empty( $report['generated_at'] ) ) : ?>
+				<small>检测时间：<?php echo esc_html( date_i18n( 'Y-m-d H:i', (int) $report['generated_at'] ) ); ?></small>
+			<?php endif; ?>
+		</div>
+		<?php
 	}
 
 	/**

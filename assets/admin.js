@@ -20,6 +20,36 @@
 		$box.find('[data-super-seo-field="keywords"]').val(data.keywords || '');
 	}
 
+	function runAdminAction($button) {
+		var $box = $button.closest('[data-super-seo-box]');
+
+		if (!$box.length) {
+			$box = $('.super-seo-wrap');
+		}
+
+		$button.prop('disabled', true);
+		setStatus($box, SuperSEO.working, false);
+
+		$.post(SuperSEO.ajaxUrl, {
+			action: $button.data('super-seo-action'),
+			nonce: SuperSEO.nonce
+		}).done(function (response) {
+			if (!response || !response.success) {
+				setStatus($box, SuperSEO.errorPrefix + (response && response.data ? response.data : '未知错误'), true);
+				return;
+			}
+
+			setStatus($box, SuperSEO.actionDone, false);
+			window.setTimeout(function () {
+				window.location.reload();
+			}, 700);
+		}).fail(function () {
+			setStatus($box, SuperSEO.errorPrefix + '请求失败', true);
+		}).always(function () {
+			$button.prop('disabled', false);
+		});
+	}
+
 	$(document).on('click', '.super-seo-ai-button', function () {
 		var $button = $(this);
 		var $box = $button.closest('[data-super-seo-box]');
@@ -77,5 +107,9 @@
 		}).always(function () {
 			$button.prop('disabled', false);
 		});
+	});
+
+	$(document).on('click', '.super-seo-action-button', function () {
+		runAdminAction($(this));
 	});
 })(jQuery);

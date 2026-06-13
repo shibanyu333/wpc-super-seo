@@ -33,6 +33,11 @@ final class Super_SEO_Sitemap {
 		add_filter( 'redirect_canonical', array( $this, 'disable_sitemap_canonical_redirect' ), 10, 2 );
 		add_action( 'template_redirect', array( $this, 'maybe_output_sitemap' ) );
 		add_filter( 'robots_txt', array( $this, 'filter_robots_txt' ), 20, 2 );
+		add_action( 'save_post', array( $this, 'clear_cache' ) );
+		add_action( 'deleted_post', array( $this, 'clear_cache' ) );
+		add_action( 'created_term', array( $this, 'clear_cache' ) );
+		add_action( 'edited_term', array( $this, 'clear_cache' ) );
+		add_action( 'delete_term', array( $this, 'clear_cache' ) );
 	}
 
 	/**
@@ -110,7 +115,7 @@ final class Super_SEO_Sitemap {
 	}
 
 	/**
-	 * Replaces robots.txt with a valid, crawler-friendly version.
+	 * Preserves robots.txt output and appends the Super SEO sitemap when needed.
 	 *
 	 * @param string $output Existing output.
 	 * @param bool   $public Whether site is public.
@@ -125,17 +130,30 @@ final class Super_SEO_Sitemap {
 			return "User-agent: *\nDisallow: /\n";
 		}
 
-		$lines = array(
-			'User-agent: *',
-			'Disallow: /wp-admin/',
-			'Allow: /wp-admin/admin-ajax.php',
-		);
+		$output = trim( (string) $output );
 
-		if ( $this->plugin->setting( 'sitemap_enabled', 1 ) ) {
-			$lines[] = 'Sitemap: ' . home_url( '/super-seo-sitemap.xml' );
+		if ( '' === $output ) {
+			$output = "User-agent: *\nDisallow: /wp-admin/\nAllow: /wp-admin/admin-ajax.php";
 		}
 
-		return implode( "\n", $lines ) . "\n";
+		if ( $this->plugin->setting( 'sitemap_enabled', 1 ) ) {
+			$sitemap = home_url( '/super-seo-sitemap.xml' );
+
+			if ( ! preg_match( '#^Sitemap:\s*' . preg_quote( $sitemap, '#' ) . '\s*$#mi', $output ) ) {
+				$output .= "\nSitemap: " . $sitemap;
+			}
+		}
+
+		return $output . "\n";
+	}
+
+	/**
+	 * Clears cached sitemap entries.
+	 *
+	 * @return void
+	 */
+	public function clear_cache() {
+		delete_transient( 'super_seo_sitemap_entries' );
 	}
 
 	/**
@@ -144,20 +162,19 @@ final class Super_SEO_Sitemap {
 	 * @return array
 	 */
 	private function entries() {
-		$entries = array(
-			array(
-				'loc'        => home_url( '/' ),
-				'lastmod'    => gmdate( 'c' ),
-				'changefreq' => 'daily',
-				'priority'   => '1.0',
-			),
-		);
+		$cached = get_transient( 'super_seo_sitemap_entries' );
+
+		if ( is_array( $cached ) ) {
+			return $cached;
+		}
+
+		$post_entries = array();
 
 		$query = new WP_Query(
 			array(
 				'post_type'              => Super_SEO_Helpers::public_post_types(),
 				'post_status'            => 'publish',
-				'posts_per_page'         => 1500,
+				'posts_per_page'         => max( 1, (int) apply_filters( 'super_seo_sitemap_post_limit', 1500 ) ),
 				'fields'                 => 'ids',
 				'orderby'                => 'modified',
 				'order'                  => 'DESC',
@@ -168,7 +185,7 @@ final class Super_SEO_Sitemap {
 		);
 
 		foreach ( $query->posts as $post_id ) {
-			$entries[] = array(
+			$post_entries[] = array(
 				'loc'        => get_permalink( $post_id ),
 				'lastmod'    => get_post_modified_time( 'c', true, $post_id ),
 				'changefreq' => 'weekly',
@@ -176,12 +193,23 @@ final class Super_SEO_Sitemap {
 			);
 		}
 
+		$entries = array(
+			array(
+				'loc'        => home_url( '/' ),
+				'lastmod'    => $this->site_lastmod(),
+				'changefreq' => 'daily',
+				'priority'   => '1.0',
+			),
+		);
+
+		$entries = array_merge( $entries, $post_entries );
+
 		$taxonomies = get_taxonomies( array( 'public' => true ), 'names' );
 		$terms      = get_terms(
 			array(
 				'taxonomy'   => $taxonomies,
 				'hide_empty' => true,
-				'number'     => 1000,
+				'number'     => max( 1, (int) apply_filters( 'super_seo_sitemap_term_limit', 1000 ) ),
 			)
 		);
 
@@ -202,6 +230,23 @@ final class Super_SEO_Sitemap {
 			}
 		}
 
+		set_transient( 'super_seo_sitemap_entries', $entries, HOUR_IN_SECONDS );
+
 		return $entries;
+	}
+
+	/**
+	 * Returns the latest published content modification time.
+	 *
+	 * @return string
+	 */
+	private function site_lastmod() {
+		$lastmod = get_lastpostmodified( 'GMT' );
+
+		if ( ! $lastmod ) {
+			return '';
+		}
+
+		return mysql2date( 'c', $lastmod, false );
 	}
 }

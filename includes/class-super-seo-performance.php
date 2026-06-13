@@ -95,7 +95,7 @@ final class Super_SEO_Performance {
 	 * @return string
 	 */
 	public function defer_script( $tag, $handle, $src ) {
-		if ( ! $this->plugin->enabled() || is_admin() || ! $this->plugin->setting( 'performance_defer_js', 1 ) || empty( $src ) ) {
+		if ( ! $this->plugin->enabled() || is_admin() || ! $this->mode_allows( 'defer_js' ) || ! $this->plugin->setting( 'performance_defer_js', 1 ) || empty( $src ) ) {
 			return $tag;
 		}
 
@@ -163,7 +163,7 @@ final class Super_SEO_Performance {
 	 * @return array
 	 */
 	public function image_editor_output_format( $formats ) {
-		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_webp_uploads', 1 ) ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_uploads', 1 ) ) {
 			return $formats;
 		}
 
@@ -185,7 +185,7 @@ final class Super_SEO_Performance {
 	 * @return array
 	 */
 	public function generate_webp_versions( $metadata, $attachment_id ) {
-		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_webp_uploads', 1 ) || ! is_array( $metadata ) ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_uploads', 1 ) || ! is_array( $metadata ) ) {
 			return $metadata;
 		}
 
@@ -239,7 +239,7 @@ final class Super_SEO_Performance {
 	 * @return array|false
 	 */
 	public function maybe_replace_attachment_src( $image, $attachment_id, $size, $icon ) {
-		if ( ! $image || $icon || ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_webp_rewrite', 1 ) || ! $this->browser_accepts_webp() ) {
+		if ( ! $image || $icon || ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_rewrite', 1 ) || ! $this->browser_accepts_webp() ) {
 			return $image;
 		}
 
@@ -261,6 +261,7 @@ final class Super_SEO_Performance {
 
 		if ( ! empty( $map[ $key ] ) ) {
 			$image[0] = esc_url_raw( $map[ $key ] );
+			$this->send_vary_accept_header();
 		}
 
 		return $image;
@@ -309,9 +310,10 @@ final class Super_SEO_Performance {
 			return $html;
 		}
 
+		$html = Super_SEO_Helpers::dedupe_head_seo_tags( $html );
 		$html = $this->inject_preload_image( $html );
 
-		if ( $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) ) ) {
+		if ( $this->mode_allows( 'minify' ) && $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) ) ) {
 			$html = $this->minify_html( $html );
 		}
 
@@ -324,7 +326,7 @@ final class Super_SEO_Performance {
 	 * @return void
 	 */
 	public function accessibility_css() {
-		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
 			return;
 		}
 		?>
@@ -345,7 +347,7 @@ final class Super_SEO_Performance {
 	 * @return void
 	 */
 	public function accessibility_js() {
-		if ( ! $this->plugin->enabled() || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
 			return;
 		}
 		?>
@@ -362,9 +364,14 @@ final class Super_SEO_Performance {
 	 * @return string
 	 */
 	private function inject_preload_image( $html ) {
-		$url = Super_SEO_Helpers::absolute_url( $this->plugin->setting( 'performance_preload_hero_image', '' ) );
+		$url        = '';
+		$manual_url = Super_SEO_Helpers::absolute_url( $this->plugin->setting( 'performance_preload_hero_image', '' ) );
 
-		if ( '' === $url && $this->plugin->setting( 'performance_auto_preload_image', 1 ) ) {
+		if ( '' !== $manual_url && $this->mode_allows( 'manual_preload' ) ) {
+			$url = $manual_url;
+		}
+
+		if ( '' === $url && $this->mode_allows( 'auto_preload' ) && $this->plugin->setting( 'performance_auto_preload_image', 1 ) ) {
 			$url = $this->discover_first_image_url( $html );
 		}
 
@@ -617,6 +624,19 @@ final class Super_SEO_Performance {
 	}
 
 	/**
+	 * Keeps full-page caches from reusing WebP HTML for non-WebP clients.
+	 *
+	 * @return void
+	 */
+	private function send_vary_accept_header() {
+		if ( headers_sent() || is_admin() ) {
+			return;
+		}
+
+		header( 'Vary: Accept', false );
+	}
+
+	/**
 	 * Returns whether Super Rocket is active and already owns a performance feature.
 	 *
 	 * @param array $keys Super Rocket setting keys.
@@ -648,10 +668,11 @@ final class Super_SEO_Performance {
 	 * @return bool
 	 */
 	private function needs_html_buffer() {
-		$needs_minify  = $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) );
+		$needs_dedupe = true;
+		$needs_minify  = $this->mode_allows( 'minify' ) && $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) );
 		$needs_preload = $this->will_preload_image();
 
-		return $needs_minify || $needs_preload;
+		return $needs_dedupe || $needs_minify || $needs_preload;
 	}
 
 	/**
@@ -660,7 +681,31 @@ final class Super_SEO_Performance {
 	 * @return bool
 	 */
 	private function will_preload_image() {
-		return $this->plugin->setting( 'performance_auto_preload_image', 1 ) || '' !== $this->plugin->setting( 'performance_preload_hero_image', '' );
+		if ( 'safe' === $this->plugin->setting( 'pagespeed_mode', 'balanced' ) ) {
+			return false;
+		}
+
+		return ( $this->mode_allows( 'auto_preload' ) && $this->plugin->setting( 'performance_auto_preload_image', 1 ) ) || '' !== $this->plugin->setting( 'performance_preload_hero_image', '' );
+	}
+
+	/**
+	 * Returns whether the selected PageSpeed mode allows a feature.
+	 *
+	 * @param string $feature Feature.
+	 * @return bool
+	 */
+	private function mode_allows( $feature ) {
+		$mode = $this->plugin->setting( 'pagespeed_mode', 'balanced' );
+
+		if ( 'safe' === $mode ) {
+			return in_array( $feature, array( 'image_attrs' ), true );
+		}
+
+		if ( 'aggressive' === $mode ) {
+			return true;
+		}
+
+		return in_array( $feature, array( 'defer_js', 'webp', 'manual_preload' ), true );
 	}
 
 	/**

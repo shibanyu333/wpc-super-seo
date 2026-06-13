@@ -119,6 +119,40 @@
 	margin-left: 10px;
 }
 
+.super-seo-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.super-seo-result-box {
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+	margin: 14px 0;
+	padding: 12px;
+}
+
+.super-seo-result-box p {
+	margin: 6px 0;
+}
+
+.super-seo-suggestion-row,
+.super-seo-audit-row {
+	border-top: 1px solid #dcdcde;
+	margin-top: 10px;
+	padding-top: 10px;
+}
+
+.super-seo-audit-row ul {
+	margin: 6px 0 0 18px;
+}
+
+.super-seo-result-box .is-error {
+	color: #b42318;
+}
+
 @media (max-width: 900px) {
 	.super-seo-status-grid,
 	.super-seo-two-col {
