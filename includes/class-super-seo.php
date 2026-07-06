@@ -70,9 +70,9 @@ final class Super_SEO {
 		$existing = get_option( SUPER_SEO_OPTION );
 
 		if ( ! is_array( $existing ) ) {
-			add_option( SUPER_SEO_OPTION, self::default_settings(), '', false );
+			add_option( SUPER_SEO_OPTION, self::default_settings(), '', true );
 		} else {
-			update_option( SUPER_SEO_OPTION, wp_parse_args( $existing, self::default_settings() ), false );
+			update_option( SUPER_SEO_OPTION, wp_parse_args( $existing, self::default_settings() ), true );
 		}
 
 		add_rewrite_rule( '^super-seo-sitemap\.xml/?$', 'index.php?super_seo_sitemap=1', 'top' );
@@ -198,7 +198,7 @@ final class Super_SEO {
 	 */
 	public function update_settings( array $settings ) {
 		$this->settings = wp_parse_args( $settings, self::default_settings() );
-		update_option( SUPER_SEO_OPTION, $this->settings, false );
+		update_option( SUPER_SEO_OPTION, $this->settings, true );
 		$this->purge_super_rocket_cache();
 	}
 

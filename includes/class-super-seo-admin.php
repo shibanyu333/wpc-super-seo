@@ -234,6 +234,7 @@ final class Super_SEO_Admin {
 						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_generate_article">按当前设置生成一篇文章</button>
 						<button type="button" class="button button-secondary super-seo-action-button" data-super-seo-action="super_seo_run_article_cron">手动触发一次定时任务</button>
 					</div>
+					<?php $this->render_last_article_result( $this->automation->last_article_result() ); ?>
 				</section>
 
 				<section class="super-seo-card">
@@ -344,7 +345,6 @@ final class Super_SEO_Admin {
 
 			$this->plugin->update_settings( $new );
 			$this->automation->ensure_article_cron();
-			flush_rewrite_rules();
 
 		wp_safe_redirect( add_query_arg( 'settings-updated', '1', admin_url( 'admin.php?page=super-seo' ) ) );
 		exit;
@@ -404,6 +404,10 @@ final class Super_SEO_Admin {
 		}
 
 		if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+			return;
+		}
+
+		if ( wp_is_post_revision( $post_id ) || wp_is_post_autosave( $post_id ) ) {
 			return;
 		}
 
@@ -840,6 +844,23 @@ final class Super_SEO_Admin {
 				<small>更新时间：<?php echo esc_html( date_i18n( 'Y-m-d H:i', (int) $profile['generated_at'] ) ); ?></small>
 			<?php endif; ?>
 		</div>
+		<?php
+	}
+
+	/**
+	 * Renders the last scheduled article result.
+	 *
+	 * @param array $result Result.
+	 * @return void
+	 */
+	private function render_last_article_result( array $result ) {
+		if ( empty( $result['time'] ) ) {
+			return;
+		}
+		?>
+		<p class="super-seo-help <?php echo empty( $result['success'] ) ? 'is-error' : ''; ?>">
+			上次定时文章（<?php echo esc_html( date_i18n( 'Y-m-d H:i', (int) $result['time'] ) ); ?>）：<?php echo esc_html( $result['message'] ?? '' ); ?>
+		</p>
 		<?php
 	}
 

@@ -234,6 +234,10 @@ final class Super_SEO_Meta {
 	 * @return string
 	 */
 	private function canonical() {
+		if ( is_404() || is_search() ) {
+			return '';
+		}
+
 		if ( is_singular() ) {
 			return get_permalink( get_queried_object_id() );
 		}

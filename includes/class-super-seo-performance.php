@@ -21,13 +21,6 @@ final class Super_SEO_Performance {
 	private $plugin;
 
 	/**
-	 * Number of attachment images processed on the page.
-	 *
-	 * @var int
-	 */
-	private $image_count = 0;
-
-	/**
 	 * Whether a high-priority image has already been selected.
 	 *
 	 * @var bool
@@ -48,7 +41,10 @@ final class Super_SEO_Performance {
 		add_filter( 'image_editor_output_format', array( $this, 'image_editor_output_format' ) );
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'generate_webp_versions' ), 20, 2 );
 		add_filter( 'wp_get_attachment_image_src', array( $this, 'maybe_replace_attachment_src' ), 20, 4 );
+		add_filter( 'wp_calculate_image_srcset', array( $this, 'maybe_replace_srcset' ), 20, 5 );
+		add_action( 'delete_attachment', array( $this, 'delete_webp_versions' ) );
 		add_action( 'send_headers', array( $this, 'security_headers' ) );
+		add_action( 'send_headers', array( $this, 'webp_vary_header' ) );
 		add_action( 'template_redirect', array( $this, 'start_output_buffer' ), 0 );
 		add_action( 'wp_head', array( $this, 'accessibility_css' ), 90 );
 		add_action( 'wp_footer', array( $this, 'accessibility_js' ), 90 );
@@ -107,13 +103,18 @@ final class Super_SEO_Performance {
 			return $tag;
 		}
 
+		// Inline "after" fragments run immediately and would break if the file they depend on is deferred.
+		if ( wp_scripts()->get_data( $handle, 'after' ) ) {
+			return $tag;
+		}
+
 		foreach ( $this->defer_exclusions() as $excluded ) {
 			if ( '' !== $excluded && false !== strpos( $handle, $excluded ) ) {
 				return $tag;
 			}
 		}
 
-		return str_replace( '<script ', '<script defer ', $tag );
+		return preg_replace( '/<script(?=[^>]*\bsrc=)/i', '<script defer', $tag, 1 );
 	}
 
 	/**
@@ -128,8 +129,6 @@ final class Super_SEO_Performance {
 		if ( ! $this->plugin->enabled() || is_admin() ) {
 			return $attr;
 		}
-
-		$this->image_count++;
 
 		if ( $this->plugin->setting( 'performance_lazy_images', 1 ) ) {
 			$attr['decoding'] = $attr['decoding'] ?? 'async';
@@ -239,11 +238,7 @@ final class Super_SEO_Performance {
 	 * @return array|false
 	 */
 	public function maybe_replace_attachment_src( $image, $attachment_id, $size, $icon ) {
-		if ( ! $image || $icon || ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_rewrite', 1 ) || ! $this->browser_accepts_webp() ) {
-			return $image;
-		}
-
-		if ( $this->super_rocket_handles( array( 'image_webp_rewrite' ) ) ) {
+		if ( ! $image || $icon || ! $this->webp_rewrite_active() ) {
 			return $image;
 		}
 
@@ -261,10 +256,77 @@ final class Super_SEO_Performance {
 
 		if ( ! empty( $map[ $key ] ) ) {
 			$image[0] = esc_url_raw( $map[ $key ] );
-			$this->send_vary_accept_header();
 		}
 
 		return $image;
+	}
+
+	/**
+	 * Replaces srcset candidate URLs with WebP when available.
+	 *
+	 * @param array  $sources       Srcset sources keyed by width.
+	 * @param array  $size_array    Requested width and height.
+	 * @param string $image_src     Image src.
+	 * @param array  $image_meta    Attachment metadata.
+	 * @param int    $attachment_id Attachment ID.
+	 * @return array
+	 */
+	public function maybe_replace_srcset( $sources, $size_array, $image_src, $image_meta, $attachment_id ) {
+		if ( ! is_array( $sources ) || ! $this->webp_rewrite_active() ) {
+			return $sources;
+		}
+
+		$map = get_post_meta( $attachment_id, '_super_seo_webp_map', true );
+
+		if ( ! is_array( $map ) || empty( $map ) ) {
+			return $sources;
+		}
+
+		foreach ( $sources as $width => $source ) {
+			if ( empty( $source['url'] ) ) {
+				continue;
+			}
+
+			$candidate = preg_replace( '/\.(jpe?g|png)$/i', '.webp', $source['url'] );
+
+			if ( $candidate !== $source['url'] && in_array( $candidate, $map, true ) ) {
+				$sources[ $width ]['url'] = $candidate;
+			}
+		}
+
+		return $sources;
+	}
+
+	/**
+	 * Deletes WebP copies when the attachment is removed.
+	 *
+	 * @param int $attachment_id Attachment ID.
+	 * @return void
+	 */
+	public function delete_webp_versions( $attachment_id ) {
+		$map = get_post_meta( $attachment_id, '_super_seo_webp_map', true );
+
+		if ( ! is_array( $map ) || empty( $map ) ) {
+			return;
+		}
+
+		$uploads = wp_get_upload_dir();
+
+		if ( empty( $uploads['basedir'] ) || empty( $uploads['baseurl'] ) ) {
+			return;
+		}
+
+		foreach ( $map as $url ) {
+			if ( ! is_string( $url ) || 0 !== strpos( $url, $uploads['baseurl'] ) ) {
+				continue;
+			}
+
+			$path = str_replace( $uploads['baseurl'], $uploads['basedir'], $url );
+
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
+		}
 	}
 
 	/**
@@ -624,12 +686,32 @@ final class Super_SEO_Performance {
 	}
 
 	/**
+	 * Returns whether WebP URL rewriting applies to the current request.
+	 *
+	 * @return bool
+	 */
+	private function webp_rewrite_active() {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_rewrite', 1 ) || ! $this->browser_accepts_webp() ) {
+			return false;
+		}
+
+		return ! $this->super_rocket_handles( array( 'image_webp_rewrite' ) );
+	}
+
+	/**
 	 * Keeps full-page caches from reusing WebP HTML for non-WebP clients.
+	 *
+	 * Sent whenever the rewrite feature is on — both WebP and non-WebP
+	 * variants must carry Vary: Accept for shared caches to key correctly.
 	 *
 	 * @return void
 	 */
-	private function send_vary_accept_header() {
-		if ( headers_sent() || is_admin() ) {
+	public function webp_vary_header() {
+		if ( headers_sent() || is_admin() || ! $this->plugin->enabled() || ! $this->mode_allows( 'webp' ) || ! $this->plugin->setting( 'performance_webp_rewrite', 1 ) ) {
+			return;
+		}
+
+		if ( $this->super_rocket_handles( array( 'image_webp_rewrite' ) ) ) {
 			return;
 		}
 

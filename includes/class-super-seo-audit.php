@@ -55,21 +55,17 @@ final class Super_SEO_Audit {
 		$urls = empty( $urls ) ? $this->default_urls() : $urls;
 		$urls = $this->normalize_urls( $urls );
 
-		if ( is_wp_error( $urls ) ) {
-			return $urls;
-		}
-
 		if ( empty( $urls ) ) {
 			return new WP_Error( 'super_seo_audit_no_urls', '没有可检测的站内 URL。' );
 		}
 
 		$results = array();
 
-		foreach ( array_slice( $urls, 0, 20 ) as $url ) {
+		foreach ( array_slice( $urls, 0, 12 ) as $url ) {
 			$response = wp_safe_remote_get(
 				$url,
 				array(
-					'timeout'     => 20,
+					'timeout'     => 8,
 					'redirection' => 3,
 					'headers'     => array(
 						'Accept' => 'text/html,application/xhtml+xml',
@@ -256,10 +252,10 @@ final class Super_SEO_Audit {
 	}
 
 	/**
-	 * Normalizes and restricts URLs to the current site host.
+	 * Normalizes URLs and skips anything outside the current site host.
 	 *
 	 * @param array $urls URLs.
-	 * @return array|WP_Error
+	 * @return array
 	 */
 	private function normalize_urls( array $urls ) {
 		$home_host = wp_parse_url( home_url( '/' ), PHP_URL_HOST );
@@ -276,7 +272,7 @@ final class Super_SEO_Audit {
 			$host = wp_parse_url( $url, PHP_URL_HOST );
 
 			if ( empty( $host ) || strtolower( (string) $host ) !== strtolower( (string) $home_host ) ) {
-				return new WP_Error( 'super_seo_audit_external_url', '本地检测只允许抓取当前网站域名下的 URL。' );
+				continue;
 			}
 
 			$clean[] = $url;

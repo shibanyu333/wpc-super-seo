@@ -24,6 +24,11 @@ final class Super_SEO_Automation {
 	const META_SUGGESTIONS_TRANSIENT = 'super_seo_meta_suggestions';
 
 	/**
+	 * Last scheduled article result option.
+	 */
+	const LAST_ARTICLE_RESULT_OPTION = 'super_seo_last_article_result';
+
+	/**
 	 * Main plugin.
 	 *
 	 * @var Super_SEO
@@ -421,7 +426,18 @@ final class Super_SEO_Automation {
 			return new WP_Error( 'super_seo_article_gate_failed', '文章质量门禁未通过：' . $gates['errors'][0]['message'] );
 		}
 
-		if ( get_page_by_title( $article['title'], OBJECT, 'post' ) ) {
+		$duplicates = get_posts(
+			array(
+				'post_type'      => 'post',
+				'post_status'    => 'any',
+				'title'          => $article['title'],
+				'posts_per_page' => 1,
+				'fields'         => 'ids',
+				'no_found_rows'  => true,
+			)
+		);
+
+		if ( ! empty( $duplicates ) ) {
 			return new WP_Error( 'super_seo_article_duplicate_title', '已存在同名文章，已阻止重复发布。' );
 		}
 
@@ -434,7 +450,7 @@ final class Super_SEO_Automation {
 		);
 
 		if ( 'future' === $postarr['post_status'] ) {
-			$postarr['post_date'] = date( 'Y-m-d H:i:s', current_time( 'timestamp' ) + DAY_IN_SECONDS );
+			$postarr['post_date'] = wp_date( 'Y-m-d H:i:s', time() + DAY_IN_SECONDS );
 		}
 
 		$category = absint( $settings['ai_article_category'] ?? 0 );
@@ -475,7 +491,28 @@ final class Super_SEO_Automation {
 			return;
 		}
 
-		$this->generate_article();
+		$result = $this->generate_article();
+
+		update_option(
+			self::LAST_ARTICLE_RESULT_OPTION,
+			array(
+				'time'    => time(),
+				'success' => ! is_wp_error( $result ),
+				'message' => is_wp_error( $result ) ? $result->get_error_message() : sprintf( '已生成文章 #%d（%s）。', $result['post_id'], $result['status'] ),
+			),
+			false
+		);
+	}
+
+	/**
+	 * Returns the last scheduled article result.
+	 *
+	 * @return array
+	 */
+	public function last_article_result() {
+		$result = get_option( self::LAST_ARTICLE_RESULT_OPTION, array() );
+
+		return is_array( $result ) ? $result : array();
 	}
 
 	/**

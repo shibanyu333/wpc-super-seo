@@ -11,8 +11,10 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 
 delete_option( 'super_seo_settings' );
 delete_option( 'super_seo_product_profile' );
+delete_option( 'super_seo_last_article_result' );
 delete_transient( 'super_seo_local_audit_results' );
 delete_transient( 'super_seo_meta_suggestions' );
+delete_transient( 'super_seo_sitemap_entries' );
 
 global $wpdb;
 

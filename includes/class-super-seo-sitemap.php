@@ -30,6 +30,7 @@ final class Super_SEO_Sitemap {
 
 		add_action( 'init', array( $this, 'add_rewrite_rule' ) );
 		add_filter( 'query_vars', array( $this, 'add_query_var' ) );
+		add_filter( 'wp_sitemaps_enabled', array( $this, 'maybe_disable_core_sitemap' ) );
 		add_filter( 'redirect_canonical', array( $this, 'disable_sitemap_canonical_redirect' ), 10, 2 );
 		add_action( 'template_redirect', array( $this, 'maybe_output_sitemap' ) );
 		add_filter( 'robots_txt', array( $this, 'filter_robots_txt' ), 20, 2 );
@@ -59,6 +60,20 @@ final class Super_SEO_Sitemap {
 		$vars[] = 'super_seo_sitemap';
 
 		return $vars;
+	}
+
+	/**
+	 * Disables the core wp-sitemap.xml while the Super SEO sitemap is active.
+	 *
+	 * @param bool $enabled Whether core sitemaps are enabled.
+	 * @return bool
+	 */
+	public function maybe_disable_core_sitemap( $enabled ) {
+		if ( $this->plugin->enabled() && $this->plugin->setting( 'sitemap_enabled', 1 ) ) {
+			return false;
+		}
+
+		return $enabled;
 	}
 
 	/**
