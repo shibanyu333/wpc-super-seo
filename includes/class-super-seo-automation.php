@@ -29,6 +29,11 @@ final class Super_SEO_Automation {
 	const LAST_ARTICLE_RESULT_OPTION = 'super_seo_last_article_result';
 
 	/**
+	 * Objects touched by the most recent bulk apply, used for rollback.
+	 */
+	const LAST_APPLY_OPTION = 'super_seo_last_meta_apply';
+
+	/**
 	 * Main plugin.
 	 *
 	 * @var Super_SEO
@@ -325,6 +330,7 @@ final class Super_SEO_Automation {
 		}
 
 		$applied = array();
+		$journal = array();
 
 		foreach ( $suggestions as $suggestion ) {
 			if ( ! empty( $suggestion['error'] ) ) {
@@ -362,9 +368,22 @@ final class Super_SEO_Automation {
 			}
 
 			$applied[] = $object_id;
+			$journal[] = array(
+				'object_type' => 'term' === $object_type ? 'term' : 'post',
+				'object_id'   => $object_id,
+			);
 		}
 
 		if ( ! empty( $applied ) ) {
+			update_option(
+				self::LAST_APPLY_OPTION,
+				array(
+					'time'  => time(),
+					'items' => $journal,
+				),
+				false
+			);
+
 			$this->plugin->purge_super_rocket_cache();
 		}
 
@@ -372,6 +391,88 @@ final class Super_SEO_Automation {
 			'applied' => $applied,
 			'count'   => count( $applied ),
 		);
+	}
+
+	/**
+	 * Restores the SEO meta snapshot captured before the last bulk apply.
+	 *
+	 * @return array|WP_Error
+	 */
+	public function undo_meta_suggestions() {
+		$record = get_option( self::LAST_APPLY_OPTION, array() );
+
+		if ( ! is_array( $record ) || empty( $record['items'] ) ) {
+			return new WP_Error( 'super_seo_nothing_to_undo', '没有可撤销的批量应用记录。' );
+		}
+
+		$restored = 0;
+
+		foreach ( (array) $record['items'] as $item ) {
+			$object_id = absint( $item['object_id'] ?? 0 );
+			$is_term   = 'term' === ( $item['object_type'] ?? '' );
+
+			if ( ! $object_id ) {
+				continue;
+			}
+
+			$snapshot = $is_term
+				? get_term_meta( $object_id, '_super_seo_previous_meta', true )
+				: get_post_meta( $object_id, '_super_seo_previous_meta', true );
+
+			if ( ! is_array( $snapshot ) ) {
+				continue;
+			}
+
+			foreach ( array( 'title', 'description', 'keywords' ) as $field ) {
+				$key   = '_super_seo_' . $field;
+				$value = (string) ( $snapshot[ $field ] ?? '' );
+
+				if ( '' === $value ) {
+					if ( $is_term ) {
+						delete_term_meta( $object_id, $key );
+					} else {
+						delete_post_meta( $object_id, $key );
+					}
+					continue;
+				}
+
+				if ( $is_term ) {
+					update_term_meta( $object_id, $key, $value );
+				} else {
+					update_post_meta( $object_id, $key, $value );
+				}
+			}
+
+			if ( $is_term ) {
+				delete_term_meta( $object_id, '_super_seo_previous_meta' );
+			} else {
+				delete_post_meta( $object_id, '_super_seo_previous_meta' );
+			}
+
+			$restored++;
+		}
+
+		delete_option( self::LAST_APPLY_OPTION );
+		$this->plugin->purge_super_rocket_cache();
+
+		if ( ! $restored ) {
+			return new WP_Error( 'super_seo_undo_empty', '没有找到可恢复的旧值快照。' );
+		}
+
+		return array(
+			'restored' => $restored,
+		);
+	}
+
+	/**
+	 * Returns the last bulk apply record.
+	 *
+	 * @return array
+	 */
+	public function last_apply_record() {
+		$record = get_option( self::LAST_APPLY_OPTION, array() );
+
+		return is_array( $record ) ? $record : array();
 	}
 
 	/**

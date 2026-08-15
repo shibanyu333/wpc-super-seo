@@ -21,11 +21,30 @@ final class Super_SEO {
 	private static $instance = null;
 
 	/**
+	 * Option holding API keys, stored separately and never autoloaded.
+	 */
+	const CREDENTIALS_OPTION = 'super_seo_credentials';
+
+	/**
 	 * Cached settings.
 	 *
 	 * @var array|null
 	 */
 	private $settings = null;
+
+	/**
+	 * Cached credentials.
+	 *
+	 * @var array|null
+	 */
+	private $credentials = null;
+
+	/**
+	 * Vision service.
+	 *
+	 * @var Super_SEO_Vision|null
+	 */
+	private $vision = null;
 
 	/**
 	 * AI client.
@@ -85,6 +104,8 @@ final class Super_SEO {
 	 * @return void
 	 */
 	public static function deactivate() {
+		wp_unschedule_hook( 'super_seo_run_article_cron' );
+		wp_unschedule_hook( Super_SEO_Vision::AUTO_HOOK );
 		flush_rewrite_rules();
 	}
 
@@ -107,6 +128,18 @@ final class Super_SEO {
 			'ai_endpoint'                      => 'https://api.deepseek.com/chat/completions',
 			'ai_model'                         => 'deepseek-chat',
 			'ai_api_key'                       => '',
+			'vision_enabled'                   => 1,
+			'vision_provider'                  => 'anthropic',
+			'vision_endpoint'                  => 'https://api.anthropic.com/v1/messages',
+			'vision_model'                     => 'claude-opus-5',
+			'vision_api_key'                   => '',
+			'vision_language'                  => '',
+			'vision_auto_on_upload'            => 0,
+			'vision_overwrite_existing'        => 0,
+			'vision_write_title'               => 1,
+			'vision_write_caption'             => 0,
+			'vision_max_edge'                  => 1024,
+			'vision_batch_size'                => 5,
 			'ai_temperature'                   => '0.4',
 			'ai_language'                      => 'zh-CN',
 			'ai_tone'                          => '专业、自然、适合 Google SEO',
@@ -132,7 +165,18 @@ final class Super_SEO {
 			'performance_minify_html'          => 0,
 			'performance_accessibility_fixes'  => 0,
 			'performance_security_headers'     => 1,
+			'performance_dedupe_head'          => 1,
+			'noindex_search'                   => 1,
 		);
+	}
+
+	/**
+	 * Setting keys that hold secrets and live in their own option.
+	 *
+	 * @return array
+	 */
+	public static function credential_keys() {
+		return array( 'ai_api_key', 'vision_api_key' );
 	}
 
 	/**
@@ -154,13 +198,14 @@ final class Super_SEO {
 
 		$this->audit      = new Super_SEO_Audit( $this );
 		$this->automation = new Super_SEO_Automation( $this, $this->ai );
+		$this->vision     = new Super_SEO_Vision( $this, $this->ai );
 
 		new Super_SEO_Meta( $this );
 		new Super_SEO_Sitemap( $this );
 		new Super_SEO_Performance( $this );
 
 		if ( is_admin() ) {
-			new Super_SEO_Admin( $this, $this->ai, $this->audit, $this->automation );
+			new Super_SEO_Admin( $this, $this->ai, $this->audit, $this->automation, $this->vision );
 		}
 	}
 
@@ -171,10 +216,80 @@ final class Super_SEO {
 	 */
 	public function settings() {
 		if ( null === $this->settings ) {
-			$this->settings = wp_parse_args( get_option( SUPER_SEO_OPTION, array() ), self::default_settings() );
+			$stored = get_option( SUPER_SEO_OPTION, array() );
+			$stored = is_array( $stored ) ? $stored : array();
+			$stored = $this->migrate_credentials( $stored );
+
+			$merged = wp_parse_args( $stored, self::default_settings() );
+
+			foreach ( self::credential_keys() as $key ) {
+				$merged[ $key ] = $this->credential( $key );
+			}
+
+			$this->settings = $merged;
 		}
 
 		return $this->settings;
+	}
+
+	/**
+	 * Returns stored credentials.
+	 *
+	 * @return array
+	 */
+	private function credentials() {
+		if ( null === $this->credentials ) {
+			$stored            = get_option( self::CREDENTIALS_OPTION, array() );
+			$this->credentials = is_array( $stored ) ? $stored : array();
+		}
+
+		return $this->credentials;
+	}
+
+	/**
+	 * Returns one credential value.
+	 *
+	 * @param string $key Credential key.
+	 * @return string
+	 */
+	public function credential( $key ) {
+		$credentials = $this->credentials();
+
+		return isset( $credentials[ $key ] ) ? (string) $credentials[ $key ] : '';
+	}
+
+	/**
+	 * Moves legacy plaintext keys out of the autoloaded settings option.
+	 *
+	 * @param array $stored Stored settings.
+	 * @return array
+	 */
+	private function migrate_credentials( array $stored ) {
+		$moved = false;
+
+		foreach ( self::credential_keys() as $key ) {
+			if ( ! array_key_exists( $key, $stored ) ) {
+				continue;
+			}
+
+			$value = trim( (string) $stored[ $key ] );
+
+			if ( '' !== $value && '' === $this->credential( $key ) ) {
+				$this->credentials          = $this->credentials();
+				$this->credentials[ $key ]  = $value;
+				$moved                      = true;
+			}
+
+			unset( $stored[ $key ] );
+			$moved = true;
+		}
+
+		if ( $moved ) {
+			update_option( self::CREDENTIALS_OPTION, $this->credentials(), false );
+			update_option( SUPER_SEO_OPTION, $stored, true );
+		}
+
+		return $stored;
 	}
 
 	/**
@@ -197,8 +312,21 @@ final class Super_SEO {
 	 * @return void
 	 */
 	public function update_settings( array $settings ) {
-		$this->settings = wp_parse_args( $settings, self::default_settings() );
-		update_option( SUPER_SEO_OPTION, $this->settings, true );
+		$merged      = wp_parse_args( $settings, self::default_settings() );
+		$credentials = $this->credentials();
+		$public      = $merged;
+
+		foreach ( self::credential_keys() as $key ) {
+			$credentials[ $key ] = (string) $merged[ $key ];
+			unset( $public[ $key ] );
+		}
+
+		$this->credentials = $credentials;
+		$this->settings    = $merged;
+
+		// Secrets are stored separately and never autoloaded on front-end requests.
+		update_option( self::CREDENTIALS_OPTION, $credentials, false );
+		update_option( SUPER_SEO_OPTION, $public, true );
 		$this->purge_super_rocket_cache();
 	}
 
@@ -291,5 +419,14 @@ final class Super_SEO {
 	 */
 	public function automation() {
 		return $this->automation;
+	}
+
+	/**
+	 * Returns the image description service.
+	 *
+	 * @return Super_SEO_Vision|null
+	 */
+	public function vision() {
+		return $this->vision;
 	}
 }

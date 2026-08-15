@@ -42,6 +42,8 @@ function get_post_meta( $post_id, $key, $single = true ) {
 require dirname( __DIR__ ) . '/includes/class-super-seo-helpers.php';
 require dirname( __DIR__ ) . '/includes/class-super-seo-audit.php';
 require dirname( __DIR__ ) . '/includes/class-super-seo-automation.php';
+require dirname( __DIR__ ) . '/includes/class-super-seo-ai.php';
+require dirname( __DIR__ ) . '/includes/class-super-seo-vision.php';
 
 function super_seo_assert_true( $condition, $message ) {
 	if ( ! $condition ) {
@@ -117,5 +119,105 @@ $snapshot = Super_SEO_Automation::post_meta_snapshot( 123 );
 super_seo_assert_same( 'Old SEO title', $snapshot['title'], 'Rollback snapshot should capture the current SEO title.' );
 super_seo_assert_same( 'Old SEO description', $snapshot['description'], 'Rollback snapshot should capture the current SEO description.' );
 super_seo_assert_same( 'old keyword', $snapshot['keywords'], 'Rollback snapshot should capture the current focus keywords.' );
+
+// --- AI response parsing ---------------------------------------------------
+
+$fenced = Super_SEO_AI::decode_json_payload( "```json\n{\"title\":\"Alpha\",\"description\":\"Beta\"}\n```" );
+
+super_seo_assert_same( 'Alpha', $fenced['title'], 'Fenced JSON payloads should decode.' );
+
+$with_thinking = Super_SEO_AI::decode_json_payload( "<thinking>let me look at the image</thinking>\n{\"alt\":\"Red mower on a slope\"}" );
+
+super_seo_assert_true( is_array( $with_thinking ), 'Leaked thinking tags must not break JSON decoding.' );
+super_seo_assert_same( 'Red mower on a slope', $with_thinking['alt'], 'Payload after a thinking block should still decode.' );
+
+super_seo_assert_true( null === Super_SEO_AI::decode_json_payload( 'sorry, I cannot help' ), 'Non-JSON responses should decode to null.' );
+
+// --- Image description sanitizing ------------------------------------------
+
+$vision = Super_SEO_AI::sanitize_vision_result(
+	array(
+		'alt'      => '图片：一台遥控割草机正在斜坡上作业',
+		'title'    => '遥控割草机',
+		'keywords' => array( '遥控割草机', '遥控割草机', '斜坡' ),
+	)
+);
+
+super_seo_assert_same( '一台遥控割草机正在斜坡上作业', $vision['alt'], 'Alt text should drop the "图片：" opener models keep adding.' );
+super_seo_assert_same( '遥控割草机, 斜坡', $vision['keywords'], 'Vision keywords should be deduplicated.' );
+
+$decorative = Super_SEO_AI::sanitize_vision_result(
+	array(
+		'alt'        => 'A decorative divider line',
+		'decorative' => true,
+	)
+);
+
+super_seo_assert_same( '', $decorative['alt'], 'Decorative images must get an empty alt attribute.' );
+
+$long_alt = Super_SEO_AI::sanitize_vision_result( array( 'alt' => str_repeat( 'a', 400 ) ) );
+
+super_seo_assert_true( mb_strlen( $long_alt['alt'], 'UTF-8' ) <= 125, 'Alt text must stay within 125 characters.' );
+
+// --- Placeholder media titles ----------------------------------------------
+
+super_seo_assert_true( Super_SEO_Vision::is_placeholder_title( 'IMG_4821' ), 'Camera file names count as placeholder titles.' );
+super_seo_assert_true( Super_SEO_Vision::is_placeholder_title( '微信图片' ), 'WeChat export names count as placeholder titles.' );
+super_seo_assert_true( Super_SEO_Vision::is_placeholder_title( '' ), 'An empty title counts as a placeholder.' );
+super_seo_assert_true( ! Super_SEO_Vision::is_placeholder_title( '遥控割草机产品图' ), 'A human-written title must never be overwritten.' );
+
+// --- Retryable vs permanent errors ------------------------------------------
+// A rate limit must never be recorded as a permanent failure: processed images
+// are excluded from future batches, so that would silently drop them for good.
+
+class Super_SEO_Test_Error {
+	private $code;
+	private $data;
+
+	public function __construct( $code, $data = null ) {
+		$this->code = $code;
+		$this->data = $data;
+	}
+
+	public function get_error_code() {
+		return $this->code;
+	}
+
+	public function get_error_data() {
+		return $this->data;
+	}
+}
+
+function is_wp_error( $thing ) {
+	return $thing instanceof Super_SEO_Test_Error;
+}
+
+$retryable = array(
+	'限流 429'      => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 429 ) ),
+	'过载 529'      => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 529 ) ),
+	'网关超时 504'  => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 504 ) ),
+	'服务器错误 500' => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 500 ) ),
+	'网络中断'      => new Super_SEO_Test_Error( 'http_request_failed' ),
+	'返回体解析失败' => new Super_SEO_Test_Error( 'super_seo_vision_parse_failed' ),
+);
+
+foreach ( $retryable as $label => $error ) {
+	super_seo_assert_true( Super_SEO_AI::is_retryable_error( $error ), "{$label} 必须判定为可重试（否则图片会被永久跳过）" );
+}
+
+$permanent = array(
+	'密钥无效 401'  => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 401 ) ),
+	'参数错误 400'  => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 400 ) ),
+	'不存在 404'    => new Super_SEO_Test_Error( 'super_seo_ai_http_error', array( 'status' => 404 ) ),
+	'模型拒绝'      => new Super_SEO_Test_Error( 'super_seo_ai_refused' ),
+	'文件格式不支持' => new Super_SEO_Test_Error( 'super_seo_vision_unsupported_file' ),
+	'未配置密钥'    => new Super_SEO_Test_Error( 'super_seo_missing_api_key' ),
+);
+
+foreach ( $permanent as $label => $error ) {
+	super_seo_assert_true( ! Super_SEO_AI::is_retryable_error( $error ), "{$label} 必须判定为永久失败（否则会无限重试）" );
+}
+
+super_seo_assert_true( ! Super_SEO_AI::is_retryable_error( null ), 'null 不是错误。' );
 
 echo "All tests passed.\n";

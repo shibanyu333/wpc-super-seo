@@ -372,14 +372,20 @@ final class Super_SEO_Performance {
 			return $html;
 		}
 
-		$html = Super_SEO_Helpers::dedupe_head_seo_tags( $html );
+		$original = $html;
+
+		if ( $this->needs_head_dedupe() ) {
+			$html = Super_SEO_Helpers::dedupe_head_seo_tags( $html );
+		}
+
 		$html = $this->inject_preload_image( $html );
 
 		if ( $this->mode_allows( 'minify' ) && $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) ) ) {
 			$html = $this->minify_html( $html );
 		}
 
-		return $html;
+		// A PCRE backtrack limit hit returns null and would blank the page.
+		return ( is_string( $html ) && '' !== $html ) ? $html : $original;
 	}
 
 	/**
@@ -388,19 +394,28 @@ final class Super_SEO_Performance {
 	 * @return void
 	 */
 	public function accessibility_css() {
-		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 0 ) || is_admin() ) {
 			return;
 		}
-		?>
-<style id="super-seo-accessibility-fixes">
-.mi-section-sub,.mi-inquiry-contact span,[data-mi-footer-note]{color:#52606a!important}
-.gc-factory-band .mi-section-label{color:#9be7b0!important}
-.ms-product-spec__label,.product_meta,.product_meta span{color:#5d554b!important}
-.product_meta a{color:#73571d!important}
-#ms-footer .ms-footer__bottom,#ms-footer .ms-footer__bottom span,#ms-footer .ms-footer__bottom a{color:#a7a7a7!important}
-.mi-whatsapp-float__button:focus-visible,a:focus-visible,button:focus-visible{outline:3px solid #1d7f46!important;outline-offset:3px!important}
-</style>
-		<?php
+
+		/**
+		 * Filters the accessibility CSS injected on the front end.
+		 *
+		 * Only theme-agnostic rules ship by default. Site-specific contrast
+		 * overrides belong in the theme or in this filter, not in the plugin.
+		 *
+		 * @param string $css Stylesheet body.
+		 */
+		$css = (string) apply_filters(
+			'super_seo_accessibility_css',
+			'a:focus-visible,button:focus-visible,[role="button"]:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid currentColor!important;outline-offset:3px!important}'
+		);
+
+		if ( '' === trim( $css ) ) {
+			return;
+		}
+
+		printf( "<style id=\"super-seo-accessibility-fixes\">%s</style>\n", $css ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 	}
 
 	/**
@@ -409,12 +424,25 @@ final class Super_SEO_Performance {
 	 * @return void
 	 */
 	public function accessibility_js() {
-		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 1 ) || is_admin() ) {
+		if ( ! $this->plugin->enabled() || ! $this->mode_allows( 'accessibility' ) || ! $this->plugin->setting( 'performance_accessibility_fixes', 0 ) || is_admin() ) {
 			return;
 		}
+
+		// Names empty icon-only buttons from their icon class, title or nearest
+		// link text, so Lighthouse stops reporting unlabelled controls.
 		?>
 <script id="super-seo-accessibility-js">
-(function(){var buttons=document.querySelectorAll('button:not([aria-label])');for(var i=0;i<buttons.length;i++){var b=buttons[i];if(!b.textContent.trim()){if(b.matches('.mi-whatsapp-float__button,[data-mi-whatsapp-toggle]')){b.setAttribute('aria-label','Open WhatsApp contact panel');}else{b.setAttribute('aria-label','Open control');}}}var logos=document.querySelectorAll('.ms-logo[aria-label]');for(var j=0;j<logos.length;j++){var text=logos[j].textContent.replace(/\s+/g,' ').trim();if(text){logos[j].setAttribute('aria-label',text);}}})();
+(function(){
+var nodes=document.querySelectorAll('button:not([aria-label]):not([aria-labelledby]),[role="button"]:not([aria-label]):not([aria-labelledby])');
+for(var i=0;i<nodes.length;i++){
+var el=nodes[i];
+if(el.textContent&&el.textContent.trim()){continue;}
+var label=el.getAttribute('title')||el.getAttribute('data-label')||'';
+if(!label){var icon=el.querySelector('[class*="icon"],[class*="fa-"],svg[aria-label],img[alt]');if(icon){label=icon.getAttribute('aria-label')||icon.getAttribute('alt')||'';}}
+if(!label){var cls=(el.className||'').toString().match(/(?:^|[\s_-])(menu|close|search|cart|prev|next|play|pause|share|toggle|filter|scroll|top)(?:[\s_-]|$)/i);if(cls){label=cls[1];}}
+el.setAttribute('aria-label',(label||'button').replace(/[-_]+/g,' ').trim());
+}
+})();
 </script>
 		<?php
 	}
@@ -507,7 +535,7 @@ final class Super_SEO_Performance {
 	private function promote_preloaded_image( $html, $url ) {
 		$updated = false;
 
-		return preg_replace_callback(
+		$result = preg_replace_callback(
 			'/<img\b[^>]*>/i',
 			function ( $matches ) use ( $url, &$updated ) {
 				$tag = $matches[0];
@@ -517,12 +545,20 @@ final class Super_SEO_Performance {
 				}
 
 				$updated = true;
-				$tag = preg_replace( '/\s(?:fetchpriority|loading|decoding)=["\'][^"\']*["\']/i', '', $tag );
+				$clean   = preg_replace( '/\s(?:fetchpriority|loading|decoding)=["\'][^"\']*["\']/i', '', $tag );
 
-				return preg_replace( '/\s*\/?>$/', ' fetchpriority="high" loading="eager" decoding="async">', $tag, 1 );
+				if ( ! is_string( $clean ) ) {
+					return $tag;
+				}
+
+				$promoted = preg_replace( '/\s*\/?>$/', ' fetchpriority="high" loading="eager" decoding="async">', $clean, 1 );
+
+				return is_string( $promoted ) ? $promoted : $tag;
 			},
 			$html
 		);
+
+		return is_string( $result ) ? $result : $html;
 	}
 
 	/**
@@ -605,7 +641,9 @@ final class Super_SEO_Performance {
 	 * @return string
 	 */
 	private function minify_html( $html ) {
+		$original     = $html;
 		$placeholders = array();
+
 		$html = preg_replace_callback(
 			'/<(script|style|pre|textarea)\b[^>]*>.*?<\/\1>/is',
 			static function ( $matches ) use ( &$placeholders ) {
@@ -617,9 +655,28 @@ final class Super_SEO_Performance {
 			$html
 		);
 
-		$html = preg_replace( '/<!--(?!\[if).*?-->/s', '', $html );
-		$html = preg_replace( '/>\s+</', '><', $html );
-		$html = preg_replace( '/\s{2,}/', ' ', $html );
+		if ( ! is_string( $html ) ) {
+			return $original;
+		}
+
+		// Whitespace between tags is collapsed to a single space, never removed:
+		// `</span> <span>` is significant and dropping it joins the two words.
+		$steps = array(
+			array( '/<!--(?!\[if|!\[endif).*?-->/s', '' ),
+			array( '/>[^\S\r\n]*[\r\n]+[^\S\r\n]*</', '> <' ),
+			array( '/>[ \t]{2,}</', '> <' ),
+			array( '/[ \t]{2,}/', ' ' ),
+		);
+
+		foreach ( $steps as $step ) {
+			$result = preg_replace( $step[0], $step[1], $html );
+
+			if ( ! is_string( $result ) ) {
+				return $original;
+			}
+
+			$html = $result;
+		}
 
 		foreach ( $placeholders as $key => $value ) {
 			$html = str_replace( $key, $value, $html );
@@ -750,11 +807,56 @@ final class Super_SEO_Performance {
 	 * @return bool
 	 */
 	private function needs_html_buffer() {
-		$needs_dedupe = true;
+		$needs_dedupe  = $this->needs_head_dedupe();
 		$needs_minify  = $this->mode_allows( 'minify' ) && $this->plugin->setting( 'performance_minify_html', 0 ) && ! $this->super_rocket_handles( array( 'html_minify' ) );
 		$needs_preload = $this->will_preload_image();
 
 		return $needs_dedupe || $needs_minify || $needs_preload;
+	}
+
+	/**
+	 * Whether duplicate head tags actually need cleaning up.
+	 *
+	 * Buffering the whole page costs TTFB, so it is only worth it when another
+	 * SEO plugin is also writing title/description/canonical/OG tags.
+	 *
+	 * @return bool
+	 */
+	private function needs_head_dedupe() {
+		if ( ! $this->plugin->setting( 'performance_dedupe_head', 1 ) ) {
+			return false;
+		}
+
+		return self::other_seo_plugin_active();
+	}
+
+	/**
+	 * Detects the common SEO plugins that would duplicate our head tags.
+	 *
+	 * @return bool
+	 */
+	public static function other_seo_plugin_active() {
+		static $detected = null;
+
+		if ( null !== $detected ) {
+			return $detected;
+		}
+
+		$detected = defined( 'WPSEO_VERSION' )
+			|| defined( 'RANK_MATH_VERSION' )
+			|| defined( 'AIOSEO_VERSION' )
+			|| defined( 'SEOPRESS_VERSION' )
+			|| defined( 'SQ_VERSION' )
+			|| class_exists( 'The_SEO_Framework\\Load' );
+
+		/**
+		 * Filters whether Super SEO should buffer the page to de-dupe head tags.
+		 *
+		 * @param bool $detected Whether another SEO plugin was detected.
+		 */
+		$detected = (bool) apply_filters( 'super_seo_needs_head_dedupe', $detected );
+
+		return $detected;
 	}
 
 	/**

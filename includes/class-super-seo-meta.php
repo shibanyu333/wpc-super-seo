@@ -79,6 +79,12 @@ final class Super_SEO_Meta {
 
 		echo "\n<!-- Super SEO 智能优化 -->\n";
 
+		$robots = $this->robots_directive();
+
+		if ( '' !== $robots ) {
+			printf( "<meta name=\"robots\" content=\"%s\">\n", esc_attr( $robots ) );
+		}
+
 		if ( '' !== $description ) {
 			printf( "<meta name=\"description\" content=\"%s\">\n", esc_attr( $description ) );
 		}
@@ -115,6 +121,40 @@ final class Super_SEO_Meta {
 		}
 
 		echo "<!-- /Super SEO 智能优化 -->\n";
+	}
+
+	/**
+	 * Returns the robots directive for the current request.
+	 *
+	 * @return string
+	 */
+	private function robots_directive() {
+		if ( self::is_noindex_object() ) {
+			return 'noindex,follow';
+		}
+
+		if ( ( is_search() || is_404() ) && $this->plugin->setting( 'noindex_search', 1 ) ) {
+			return 'noindex,follow';
+		}
+
+		return '';
+	}
+
+	/**
+	 * Whether the queried post or term is marked noindex.
+	 *
+	 * @return bool
+	 */
+	public static function is_noindex_object() {
+		if ( is_singular() ) {
+			return '1' === (string) get_post_meta( get_queried_object_id(), '_super_seo_noindex', true );
+		}
+
+		if ( is_category() || is_tag() || is_tax() ) {
+			return '1' === (string) get_term_meta( get_queried_object_id(), '_super_seo_noindex', true );
+		}
+
+		return false;
 	}
 
 	/**

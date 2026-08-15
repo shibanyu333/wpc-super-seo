@@ -196,6 +196,19 @@ final class Super_SEO_Sitemap {
 				'no_found_rows'          => true,
 				'update_post_meta_cache' => false,
 				'update_post_term_cache' => false,
+				// Pages marked noindex must not be advertised to crawlers.
+				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query
+					'relation' => 'OR',
+					array(
+						'key'     => '_super_seo_noindex',
+						'compare' => 'NOT EXISTS',
+					),
+					array(
+						'key'     => '_super_seo_noindex',
+						'value'   => '1',
+						'compare' => '!=',
+					),
+				),
 			)
 		);
 
@@ -230,6 +243,10 @@ final class Super_SEO_Sitemap {
 
 		if ( ! is_wp_error( $terms ) ) {
 			foreach ( $terms as $term ) {
+				if ( '1' === (string) get_term_meta( $term->term_id, '_super_seo_noindex', true ) ) {
+					continue;
+				}
+
 				$link = get_term_link( $term );
 
 				if ( is_wp_error( $link ) ) {

@@ -153,6 +153,28 @@
 	color: #b42318;
 }
 
+[data-super-seo-vision-log] {
+	max-height: 280px;
+	overflow-y: auto;
+}
+
+[data-super-seo-vision-log] p {
+	margin: 0 0 4px;
+	font-size: 12px;
+	line-height: 1.5;
+	word-break: break-word;
+}
+
+[data-super-seo-provider-note] {
+	margin-top: -4px;
+}
+
+.compat-field-super_seo_vision .super-seo-inline-status {
+	display: block;
+	margin-top: 4px;
+	font-size: 12px;
+}
+
 @media (max-width: 900px) {
 	.super-seo-status-grid,
 	.super-seo-two-col {

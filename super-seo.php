@@ -2,8 +2,8 @@
 /**
  * Plugin Name:       Super SEO 智能优化
  * Plugin URI:        https://example.com/super-seo
- * Description:       面向小白用户的中文 SEO 与 PageSpeed 优化插件，支持 DeepSeek/OpenAI 兼容大模型生成标题、描述和关键词。
- * Version:           1.0.0
+ * Description:       面向小白用户的中文 SEO 与 PageSpeed 优化插件。支持 Claude / GPT / Kimi / Qwen / DeepSeek 生成标题、描述、关键词，并用视觉模型自动给图片写 alt 描述标签。
+ * Version:           1.1.0
  * Author:            Super SEO
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SUPER_SEO_VERSION', '1.0.0' );
+define( 'SUPER_SEO_VERSION', '1.1.0' );
 define( 'SUPER_SEO_FILE', __FILE__ );
 define( 'SUPER_SEO_PATH', plugin_dir_path( __FILE__ ) );
 define( 'SUPER_SEO_URL', plugin_dir_url( __FILE__ ) );
@@ -32,6 +32,7 @@ require_once SUPER_SEO_PATH . 'includes/class-super-seo-admin.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-meta.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-performance.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo-sitemap.php';
+require_once SUPER_SEO_PATH . 'includes/class-super-seo-vision.php';
 require_once SUPER_SEO_PATH . 'includes/class-super-seo.php';
 
 /**
